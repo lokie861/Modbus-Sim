@@ -152,11 +152,105 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
         right.addLayout(btn_layout)
+        
+        self.current_edit_row = None                     # row that is currently being edited
+        self.edit_grace_timers = {}                      # row -> QTimer (3s) to expire grace
+        self.table.itemDoubleClicked.connect(self.on_edit_start)
+        self.table.itemClicked.connect(self.on_possible_edit_start)
+        self.table.itemChanged.connect(self.on_item_changed_safe)
 
         self.statusBar().showMessage('Ready')
         self.slave_list.currentItemChanged.connect(self.on_slave_selected)
     
+    def _set_cell_text_safe(self, row, col, text):
+        """Set cell text without emitting itemChanged signals (safe for programmatic updates)."""
+        try:
+            self.table.blockSignals(True)
+            item = self.table.item(row, col)
+            if item is None:
+                item = QtWidgets.QTableWidgetItem()
+                self.table.setItem(row, col, item)
+            item.setText(str(text))
+        finally:
+            self.table.blockSignals(False)
 
+    def on_possible_edit_start(self, item):
+        """
+        Called on single click. If user then starts editing (double click or typing),
+        doubleClicked handler will mark start. This method is a lightweight hint.
+        """
+        # No hard action here; keep for responsiveness if you want to mark when clicked.
+        pass
+
+    def on_edit_start(self, item):
+        """Mark that the user started editing this row (double click). Cancel any expiry for this row."""
+        if item is None:
+            return
+        row = item.row()
+        self.current_edit_row = row
+        # If a grace timer existed from a prior edit, cancel it (we are now editing again).
+        timer = self.edit_grace_timers.pop(row, None)
+        if timer:
+            timer.stop()
+            timer.deleteLater()
+
+    def on_item_changed_safe(self, item):
+        """
+        Called when an edit is committed (Enter or focus-out). Start the 3s grace timer
+        during which auto-refresh will skip this row. If the change was programmatic it
+        won't trigger because we blockSignals when writing programmatically.
+        """
+        if item is None:
+            return
+        row = item.row()
+
+        # If user edited (we were in editing mode), set a grace timer
+        # Clear current_edit_row (editor closed) and begin grace
+        if self.current_edit_row == row:
+            self.current_edit_row = None
+            self._start_edit_grace(row)
+
+    def _start_edit_grace(self, row):
+        """Start or restart a 3s grace timer for the given row to prevent refresh overwrite."""
+        # cancel existing timer if any
+        existing = self.edit_grace_timers.pop(row, None)
+        if existing:
+            existing.stop()
+            existing.deleteLater()
+
+        timer = QtCore.QTimer(self)
+        timer.setSingleShot(True)
+        timer.setInterval(3000)  # 3 seconds grace
+        timer.timeout.connect(lambda r=row: self._end_edit_grace(r))
+        timer.start()
+        self.edit_grace_timers[row] = timer
+
+    def _end_edit_grace(self, row):
+        """Grace expired — remove timer and force a refresh for that row."""
+        timer = self.edit_grace_timers.pop(row, None)
+        if timer:
+            timer.stop()
+            timer.deleteLater()
+
+        # If a slave is selected and running, refresh this single row from runtime
+        cur = self.slave_list.currentRow()
+        if cur < 0:
+            return
+        slave = self.slaves[cur]
+        rt = self.runtimes.get(slave['name'])
+        if not rt:
+            return
+
+        regs = slave.get('registers', [])
+        if row < 0 or row >= len(regs):
+            return
+
+        reg = regs[row]
+        v = self.read_register_value(rt, reg)
+        if v is not None:
+            reg['value'] = v
+            # use safe setter to avoid re-triggering itemChanged
+            self._set_cell_text_safe(row, 5, v)
 
     # ----- Auto-refresh methods -----
     def toggle_auto_refresh(self, state):
@@ -585,21 +679,48 @@ class MainWindow(QtWidgets.QMainWindow):
                 value = val_text
             else:
                 value = int(val_text)
-                
+                    
         except ValueError:
             QtWidgets.QMessageBox.warning(self, 'Warning', f'Invalid value for {data_type}')
             return
         
         reg['value'] = value
-        
+
+        # ------------------ ADDED AS PER POINT 6 ------------------
+        # Cancel the 3-second grace period if this row was in grace
+        timer = self.edit_grace_timers.pop(row, None)
+        if timer:
+            timer.stop()
+            timer.deleteLater()
+
+        # If this row was considered currently editing, clear the flag
+        if self.current_edit_row == row:
+            self.current_edit_row = None
+        # -----------------------------------------------------------
+
         rt = self.runtimes.get(slave['name'])
         if rt:
             self.write_register_value(rt, reg, value)
-            self.statusBar().showMessage(f"Applied: {reg['table'].upper()}:{reg['address']} = {value}")
+
+            # Use safe cell update to avoid triggering itemChanged unnecessarily
+            self._set_cell_text_safe(row, 5, value)
+
+            self.statusBar().showMessage(
+                f"Applied: {reg['table'].upper()}:{reg['address']} = {value}"
+            )
         else:
-            self.statusBar().showMessage(f"Updated (not running): {reg['table'].upper()}:{reg['address']} = {value}")
+            # Also update table safely
+            self._set_cell_text_safe(row, 5, value)
+
+            self.statusBar().showMessage(
+                f"Updated (not running): {reg['table'].upper()}:{reg['address']} = {value}"
+            )
 
     def refresh_table_values(self, silent=False):
+        # Don't refresh if user is typing in any cell editor
+        if self.is_editing_cell:
+            return
+
         cur = self.slave_list.currentRow()
         if cur < 0:
             return
@@ -611,15 +732,19 @@ class MainWindow(QtWidgets.QMainWindow):
                 QtWidgets.QMessageBox.information(self, 'Info', 'Slave is not running')
             return
         
-        regs = slave.get('registers', [])
-        for i, reg in enumerate(regs):
+        # inside the loop over regs (either refresh_table_values or search_refresh_table_values)
+        for i, reg in enumerate(slave.get('registers', [])):
+            # Skip rows currently being edited OR still in grace timers
+            if self.current_edit_row is not None and i == self.current_edit_row:
+                continue
+            if i in self.edit_grace_timers:
+                # still in grace for this row
+                continue
+
             v = self.read_register_value(rt, reg)
             if v is not None:
                 reg['value'] = v
-                item = self.table.item(i, 5)
-                if item:
-                    item.setText(str(v))
-        
+                self._set_cell_text_safe(i, 5, v)
         if not silent:
             self.statusBar().showMessage('Values refreshed from running slave')
 
