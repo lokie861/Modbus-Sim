@@ -30,7 +30,7 @@ from Converstion import TypeConversions
 from SalveHandler import SlaveRuntime, SlaveDialog
 from RegisterDialog import RegisterDialog
 from PyQt5 import QtWidgets, QtCore
-
+from serial.tools import list_ports
 
 # --------------------- PyQt GUI ---------------------
 class MainWindow(QtWidgets.QMainWindow):
@@ -44,7 +44,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.slaves = []
         self.runtimes = {}
         self.converter = TypeConversions()
-        
+                
+        # Auto-gen timer
+        self.auto_gen_timer = QtCore.QTimer()
+        self.auto_gen_timer.timeout.connect(self.process_auto_gen)
+        self.auto_gen_timer.start(100)  # Check every 100ms
+        self.auto_gen_states = {}  # track state for each register
+
         # Auto-refresh
         self.auto_refresh_enabled = False
         self.refresh_timer = QtCore.QTimer()
@@ -328,42 +334,50 @@ class MainWindow(QtWidgets.QMainWindow):
 
         dlg = SlaveDialog(self)
 
-        # Pre-fill dialog fields with existing data
-        dlg.setWindowTitle(f"Edit Slave: {slave['name']}")
-        dlg.name_edit.setText(slave.get('name', ''))
+        # ✅ Refresh COM Ports before loading values
+        dlg.serial_port.clear()
+        ports = [p.device for p in list_ports.comports()]
+        if not ports:
+            ports = ["COM1"]  # fallback default
+        dlg.serial_port.addItems(ports)
 
+        # --- Load existing slave data into dialog ---
+        dlg.name_edit.setText(slave.get('name', 'slave1'))
         dlg.type_combo.setCurrentText(slave.get('type', 'tcp'))
         dlg.unit_edit.setValue(int(slave.get('unit_id', 1)))
 
+        # TCP SETTINGS
         if slave.get('type') == 'tcp':
             dlg.tcp_host.setText(slave.get('host', '0.0.0.0'))
             dlg.tcp_port.setValue(int(slave.get('port', 5020)))
+            dlg.tcp_timout.setValue(int(slave.get('timeout', 1)))
+
+        # SERIAL SETTINGS
         else:
-            dlg.serial_port.setText(slave.get('port', 'COM1'))
+            # make sure selected port is in dropdown
+            existing_port = slave.get('port', 'COM1')
+            if existing_port not in ports:
+                dlg.serial_port.addItem(existing_port)
+            dlg.serial_port.setCurrentText(existing_port)
+
             dlg.serial_baud.setCurrentText(str(slave.get('baudrate', 9600)))
             dlg.serial_parity.setCurrentText(slave.get('parity', 'N'))
             dlg.serial_bytesize.setCurrentText(str(slave.get('bytesize', 8)))
             dlg.serial_stopbits.setCurrentText(str(slave.get('stopbits', 1)))
 
-        # --- Accept dialog updates ---
+            # Serial Mode
+            mode = slave.get('mode', 'rtu').lower()
+            dlg.serial_mode_rtu.setChecked(mode == 'rtu')
+            dlg.serial_mode_ascii.setChecked(mode == 'ascii')
+
+        # -------------------------
         if dlg.exec_() == QtWidgets.QDialog.Accepted:
-            updated = dlg.get_data()
-
-            # Keep registers unchanged
-            updated['registers'] = slave.get('registers', [])
-
-            # Check name conflict if name changed
-            if updated['name'] != slave['name'] and any(
-                s['name'] == updated['name'] for s in self.slaves
-            ):
-                QtWidgets.QMessageBox.warning(
-                    self, 'Warning', 'A slave with this name already exists'
-                )
-                return
-
-            self.slaves[cur] = updated
+            data = dlg.get_data()
+            data['registers'] = slave.get('registers', [])
+            self.slaves[cur] = data
             self.update_slave_list()
-            self.statusBar().showMessage(f"Updated slave: {updated['name']}")
+            self.populate_table(data)
+            self.statusBar().showMessage(f"Slave '{data['name']}' updated")
 
 
     def start_selected_slave(self):
@@ -472,9 +486,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 for i, w in enumerate(words):
                     rt.set_register(table, addr + i, w)
             elif data_type == 'string':
+                str_len = reg.get('string_length', 10)
                 words = self.converter.from_string(str(value), inverse)
                 for i, w in enumerate(words):
-                    rt.set_register(table, addr + i, w)
+                    if i < str_len:  # Don't exceed allocated registers
+                        rt.set_register(table, addr + i, w)
         except Exception as e:
             print(f"Error writing register: {e}")
 
@@ -511,6 +527,13 @@ class MainWindow(QtWidgets.QMainWindow):
             elif data_type == 'double64':
                 return self.converter.to_double64(words, 0, inverse)
             elif data_type == 'string':
+                str_len = reg.get('string_length', 10)
+                words = []
+                for i in range(str_len):
+                    w = rt.get_register(table, addr + i)
+                    if w is None:
+                        return None
+                    words.append(w)
                 return self.converter.to_string(words, inverse)
         except Exception as e:
             print(f"Error reading register: {e}")
@@ -564,9 +587,202 @@ class MainWindow(QtWidgets.QMainWindow):
         self.table.setItem(row, 5, value_item)
         self.table.setItem(row, 6, writable_item)
 
-        btn = QtWidgets.QPushButton('Apply')
-        btn.clicked.connect(partial(self.apply_table_row, row))
-        self.table.setCellWidget(row, 7, btn)
+        # Actions column with Apply and Gen toggle
+        actions_widget = QtWidgets.QWidget()
+        actions_layout = QtWidgets.QHBoxLayout(actions_widget)
+        actions_layout.setContentsMargins(2, 2, 2, 2)
+        
+        apply_btn = QtWidgets.QPushButton('Apply')
+        apply_btn.clicked.connect(partial(self.apply_table_row, row))
+        actions_layout.addWidget(apply_btn)
+        
+        # Add Gen toggle button if auto-gen is enabled
+        auto_gen_config = reg.get('auto_gen', {})
+        if auto_gen_config.get('enabled', False):
+            gen_btn = QtWidgets.QPushButton('▶ Gen')
+            gen_btn.setCheckable(True)
+            gen_btn.setChecked(auto_gen_config.get('active', False))
+
+            # Set color based on initial checked state
+            if gen_btn.isChecked():
+                gen_btn.setText('⏸ Gen')
+                gen_btn.setStyleSheet("background-color: #90EE90;")
+            else:
+                gen_btn.setStyleSheet("")
+
+            # Connect click to toggle function
+            def on_toggle(btn, row_index):
+                partial(self.toggle_auto_gen, row_index)()  # call your original toggle
+                # Update color dynamically
+                if btn.isChecked():
+                    btn.setStyleSheet("background-color: #90EE90;")
+                else:
+                    btn.setStyleSheet("")
+
+            gen_btn.clicked.connect(lambda checked, b=gen_btn, r=row: on_toggle(b, r))
+            actions_layout.addWidget(gen_btn)
+
+            # Initialize state
+            key = self._get_reg_key(row)
+            if key not in self.auto_gen_states:
+                self.auto_gen_states[key] = {
+                    'last_update': 0,
+                    'current_value': reg.get('value', 0),
+                    'toggle_state': False
+                }
+
+        self.table.setCellWidget(row, 7, actions_widget)
+
+    def _get_reg_key(self, row):
+        """Generate unique key for register"""
+        cur = self.slave_list.currentRow()
+        if cur < 0:
+            return None
+        slave = self.slaves[cur]
+        regs = slave.get('registers', [])
+        if row >= len(regs):
+            return None
+        reg = regs[row]
+        return f"{slave['name']}_{reg['table']}_{reg['address']}"
+
+    def toggle_auto_gen(self, row):
+        """Toggle auto-generation for a register"""
+        cur = self.slave_list.currentRow()
+        if cur < 0:
+            return
+        
+        slave = self.slaves[cur]
+        regs = slave.get('registers', [])
+        if row >= len(regs):
+            return
+        
+        reg = regs[row]
+        auto_gen = reg.get('auto_gen', {})
+        
+        # Toggle active state
+        auto_gen['active'] = not auto_gen.get('active', False)
+        
+        # Update button text
+        actions_widget = self.table.cellWidget(row, 7)
+        if actions_widget:
+            layout = actions_widget.layout()
+            if layout.count() > 1:
+                gen_btn = layout.itemAt(1).widget()
+                if auto_gen['active']:
+                    gen_btn.setText('⏸ Gen')
+                    gen_btn.setStyleSheet('background-color: #90EE90;')
+                else:
+                    gen_btn.setText('▶ Gen')
+                    gen_btn.setStyleSheet('')
+        
+        status = 'started' if auto_gen['active'] else 'stopped'
+        self.statusBar().showMessage(f"Auto-gen {status} for {reg['name']}")
+
+    def process_auto_gen(self):
+        """Process auto-generation for all active registers"""
+        import random
+        import time
+        
+        cur = self.slave_list.currentRow()
+        if cur < 0:
+            return
+        
+        slave = self.slaves[cur]
+        rt = self.runtimes.get(slave['name'])
+        if not rt:
+            return
+        
+        current_time = time.time() * 1000  # Convert to ms
+        
+        for row, reg in enumerate(slave.get('registers', [])):
+            auto_gen = reg.get('auto_gen', {})
+            if not auto_gen.get('enabled') or not auto_gen.get('active'):
+                continue
+            
+            key = self._get_reg_key(row)
+            if not key:
+                continue
+            
+            state = self.auto_gen_states.get(key)
+            if not state:
+                continue
+            
+            # Check if it's time to update
+            interval = auto_gen.get('interval', 1000)
+            if current_time - state['last_update'] < interval:
+                continue
+            
+            state['last_update'] = current_time
+            
+            # Generate new value based on mode
+            mode = auto_gen.get('mode', 'Random')
+            data_type = reg.get('data_type', 'uint16')
+            current_val = state['current_value']
+            
+            if mode == 'Toggle':
+                if data_type == 'bool':
+                    new_val = 0 if current_val else 1
+                else:
+                    state['toggle_state'] = not state['toggle_state']
+                    new_val = 1 if state['toggle_state'] else 0
+            
+            elif mode == 'Random':
+                min_val = auto_gen.get('min', 0)
+                max_val = auto_gen.get('max', 100)
+                
+                if data_type in ['float32', 'double64']:
+                    new_val = random.uniform(min_val, max_val)
+                elif data_type == 'string':
+                    chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'
+                    length = random.randint(5, 15)
+                    new_val = ''.join(random.choice(chars) for _ in range(length))
+                else:
+                    new_val = random.randint(int(min_val), int(max_val))
+            
+            elif mode == 'Increment':
+                step = auto_gen.get('step', 1)
+                max_val = auto_gen.get('max', 100)
+                
+                if data_type in ['float32', 'double64']:
+                    new_val = current_val + step
+                    if new_val > max_val:
+                        new_val = auto_gen.get('min', 0)
+                else:
+                    new_val = int(current_val) + int(step)
+                    if new_val > max_val:
+                        new_val = int(auto_gen.get('min', 0))
+            
+            elif mode == 'Decrement':
+                step = auto_gen.get('step', 1)
+                min_val = auto_gen.get('min', 0)
+                
+                if data_type in ['float32', 'double64']:
+                    new_val = current_val - step
+                    if new_val < min_val:
+                        new_val = auto_gen.get('max', 100)
+                else:
+                    new_val = int(current_val) - int(step)
+                    if new_val < min_val:
+                        new_val = int(auto_gen.get('max', 100))
+            else:
+                continue
+            
+            # Update state and register
+            state['current_value'] = new_val
+            reg['value'] = new_val
+            
+            # Write to runtime
+            self.write_register_value(rt, reg, new_val)
+            
+            # Update table display (skip if in grace period)
+            if row not in self.edit_grace_timers and self.current_edit_row != row:
+                self._set_cell_text_safe(row, 5, new_val)
+
+    @property
+    def is_editing_cell(self):
+        """Check if any cell is currently being edited"""
+        return self.current_edit_row is not None
+
 
     def add_register_dialog(self):
         cur = self.slave_list.currentRow()
@@ -579,13 +795,13 @@ class MainWindow(QtWidgets.QMainWindow):
             slave = self.slaves[cur]
             
             # Check for overlapping addresses
-            reg_size = self.get_register_size(r['data_type'])
+            reg_size = self.get_register_size(r['data_type'], r)
             new_range = range(r['address'], r['address'] + reg_size)
-            
+
             for reg in slave.get('registers', []):
                 if reg['table'] != r['table']:
                     continue
-                existing_size = self.get_register_size(reg.get('data_type', 'uint16'))
+                existing_size = self.get_register_size(reg.get('data_type', 'uint16'), reg)
                 existing_range = range(reg['address'], reg['address'] + existing_size)
                 
                 if any(addr in existing_range for addr in new_range):
@@ -594,7 +810,6 @@ class MainWindow(QtWidgets.QMainWindow):
                         f"Address range overlaps with existing register at {reg['table'].upper()}:{reg['address']}"
                     )
                     return
-            
             slave.setdefault('registers', []).append(r)
             
             rt = self.runtimes.get(slave['name'])
@@ -653,7 +868,16 @@ class MainWindow(QtWidgets.QMainWindow):
             self.populate_table(slave)
             self.statusBar().showMessage(f"Edited register: {r['table'].upper()}:{r['address']}")
 
-
+    def get_register_size(self, data_type, reg=None):
+        """Return number of registers needed for data type"""
+        if data_type == 'string' and reg:
+            return reg.get('string_length', 10)
+        
+        sizes = {
+            'uint16': 1, 'int32': 2, 'uint32': 2, 'float32': 2,
+            'int64': 4, 'uint64': 4, 'double64': 4
+        }
+        return sizes.get(data_type, 1)
 
     def apply_table_row(self, row):
         cur = self.slave_list.currentRow()
@@ -804,10 +1028,14 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, 'Error', f'Failed to save:\n{e}')
 
-    def load_config(self):
-        fname, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, 'Load Configuration', '', 'Modbus Simulator Files (*.mbsim);;JSON Files (*.json);;All Files (*)'
-        )
+    def load_config(self,path=None):
+        if path is None:
+            fname, _ = QtWidgets.QFileDialog.getOpenFileName(
+                self, 'Load Configuration', '', 'Modbus Simulator Files (*.mbsim);;JSON Files (*.json);;All Files (*)'
+            )
+        else:
+            fname=path
+            
         if not fname:
             return
         try:
@@ -851,6 +1079,7 @@ def main():
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle('Fusion')
     w = MainWindow()
+    w.load_config(r'D:\Personal Projects\Modbus-Sim\da.mbsim')
     w.show()
     sys.exit(app.exec_())
 

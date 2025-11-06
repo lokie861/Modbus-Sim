@@ -1,0 +1,68 @@
+{
+  "version": "2.0",
+  "format": "modbus_simulator_config",
+  "slaves": [
+    {
+      "name": "slave1",
+      "type": "serial",
+      "unit_id": 1,
+      "registers": [
+        {
+          "address": 0,
+          "table": "hr",
+          "data_type": "uint16",
+          "endian": "big",
+          "name": "register1",
+          "value": 0,
+          "writable": true,
+          "auto_gen": {
+            "enabled": true,
+            "mode": "Random",
+            "min": 0,
+            "max": 100,
+            "step": 1,
+            "interval": 1000,
+            "active": false
+          }
+        }
+      ],
+      "port": "COM1",
+      "baudrate": 9600,
+      "parity": "E",
+      "bytesize": 7,
+      "mode": "ascii",
+      "stopbits": 1
+    },
+    {
+      "name": "slave2",
+      "type": "tcp",
+      "unit_id": 1,
+      "registers": [
+        {
+          "address": 0,
+          "table": "hr",
+          "data_type": "uint16",
+          "endian": "big",
+          "name": "register1",
+          "value": 0,
+          "writable": true,
+          "auto_gen": {
+            "enabled": true,
+            "mode": "Random",
+            "min": 0,
+            "max": 100,
+            "step": 1,
+            "interval": 1000,
+            "active": false
+          }
+        }
+      ],
+      "host": "0.0.0.0",
+      "port": 5020
+    }
+  ],
+  "settings": {
+    "auto_refresh": false,
+    "refresh_interval": 1000
+  }
+}
