@@ -12,8 +12,44 @@
           "table": "hr",
           "data_type": "uint16",
           "endian": "big",
-          "name": "register1",
-          "value": 0,
+          "name": "Holding Start",
+          "value": 66,
+          "writable": true,
+          "auto_gen": {
+            "enabled": true,
+            "mode": "Increment",
+            "min": 0,
+            "max": 100,
+            "step": 1,
+            "interval": 1000,
+            "active": true
+          }
+        },
+        {
+          "address": 65535,
+          "table": "hr",
+          "data_type": "uint16",
+          "endian": "big",
+          "name": "Holding End",
+          "value": 36,
+          "writable": true,
+          "auto_gen": {
+            "enabled": true,
+            "mode": "Decrement",
+            "min": 0,
+            "max": 100,
+            "step": 1,
+            "interval": 1000,
+            "active": true
+          }
+        },
+        {
+          "address": 32767,
+          "table": "hr",
+          "data_type": "uint16",
+          "endian": "big",
+          "name": "Holding Mid",
+          "value": 17,
           "writable": true,
           "auto_gen": {
             "enabled": true,
@@ -22,7 +58,169 @@
             "max": 100,
             "step": 1,
             "interval": 1000,
-            "active": false
+            "active": true
+          }
+        },
+        {
+          "address": 0,
+          "table": "co",
+          "data_type": "bool",
+          "endian": "little",
+          "name": "Coil Start",
+          "value": 1,
+          "writable": true,
+          "auto_gen": {
+            "enabled": true,
+            "mode": "Random",
+            "min": 0,
+            "max": 1,
+            "step": 1,
+            "interval": 1000,
+            "active": true
+          }
+        },
+        {
+          "address": 65535,
+          "table": "co",
+          "data_type": "bool",
+          "endian": "big",
+          "name": "Coil End",
+          "value": 1,
+          "writable": true,
+          "auto_gen": {
+            "enabled": true,
+            "mode": "Random",
+            "min": 0,
+            "max": 1,
+            "step": 1,
+            "interval": 1000,
+            "active": true
+          }
+        },
+        {
+          "address": 32767,
+          "table": "co",
+          "data_type": "bool",
+          "endian": "big",
+          "name": "Coil Mid",
+          "value": 1,
+          "writable": true,
+          "auto_gen": {
+            "enabled": true,
+            "mode": "Random",
+            "min": 0,
+            "max": 1,
+            "step": 1,
+            "interval": 1000,
+            "active": true
+          }
+        },
+        {
+          "address": 0,
+          "table": "di",
+          "data_type": "bool",
+          "endian": "big",
+          "name": "DI Start",
+          "value": 0,
+          "writable": true,
+          "auto_gen": {
+            "enabled": true,
+            "mode": "Toggle",
+            "min": 0,
+            "max": 1,
+            "step": 1,
+            "interval": 1000,
+            "active": true
+          }
+        },
+        {
+          "address": 65535,
+          "table": "di",
+          "data_type": "bool",
+          "endian": "big",
+          "name": "DI End",
+          "value": 1,
+          "writable": true,
+          "auto_gen": {
+            "enabled": true,
+            "mode": "Toggle",
+            "min": 0,
+            "max": 1,
+            "step": 1,
+            "interval": 1000,
+            "active": true
+          }
+        },
+        {
+          "address": 32767,
+          "table": "di",
+          "data_type": "bool",
+          "endian": "big",
+          "name": "DI Mid",
+          "value": 1,
+          "writable": true,
+          "auto_gen": {
+            "enabled": true,
+            "mode": "Toggle",
+            "min": 0,
+            "max": 1,
+            "step": 1,
+            "interval": 1000,
+            "active": true
+          }
+        },
+        {
+          "address": 0,
+          "table": "ir",
+          "data_type": "uint16",
+          "endian": "big",
+          "name": "IR Start",
+          "value": 53,
+          "writable": true,
+          "auto_gen": {
+            "enabled": true,
+            "mode": "Random",
+            "min": 0,
+            "max": 100,
+            "step": 1,
+            "interval": 1000,
+            "active": true
+          }
+        },
+        {
+          "address": 65535,
+          "table": "ir",
+          "data_type": "uint16",
+          "endian": "big",
+          "name": "IR End",
+          "value": 0,
+          "writable": true,
+          "auto_gen": {
+            "enabled": true,
+            "mode": "Toggle",
+            "min": 0,
+            "max": 100,
+            "step": 1,
+            "interval": 1000,
+            "active": true
+          }
+        },
+        {
+          "address": 32767,
+          "table": "ir",
+          "data_type": "uint16",
+          "endian": "big",
+          "name": "IR Mid",
+          "value": 1,
+          "writable": true,
+          "auto_gen": {
+            "enabled": true,
+            "mode": "Toggle",
+            "min": 0,
+            "max": 100,
+            "step": 1,
+            "interval": 1000,
+            "active": true
           }
         }
       ],
@@ -43,8 +241,44 @@
           "table": "hr",
           "data_type": "uint16",
           "endian": "big",
-          "name": "register1",
-          "value": 0,
+          "name": "Holding Start",
+          "value": 66,
+          "writable": true,
+          "auto_gen": {
+            "enabled": true,
+            "mode": "Increment",
+            "min": 0,
+            "max": 100,
+            "step": 1,
+            "interval": 1000,
+            "active": true
+          }
+        },
+        {
+          "address": 65535,
+          "table": "hr",
+          "data_type": "uint16",
+          "endian": "big",
+          "name": "Holding End",
+          "value": 36,
+          "writable": true,
+          "auto_gen": {
+            "enabled": true,
+            "mode": "Decrement",
+            "min": 0,
+            "max": 100,
+            "step": 1,
+            "interval": 1000,
+            "active": true
+          }
+        },
+        {
+          "address": 32767,
+          "table": "hr",
+          "data_type": "uint16",
+          "endian": "big",
+          "name": "Holding Mid",
+          "value": 17,
           "writable": true,
           "auto_gen": {
             "enabled": true,
@@ -53,7 +287,169 @@
             "max": 100,
             "step": 1,
             "interval": 1000,
-            "active": false
+            "active": true
+          }
+        },
+        {
+          "address": 0,
+          "table": "co",
+          "data_type": "bool",
+          "endian": "little",
+          "name": "Coil Start",
+          "value": 1,
+          "writable": true,
+          "auto_gen": {
+            "enabled": true,
+            "mode": "Random",
+            "min": 0,
+            "max": 1,
+            "step": 1,
+            "interval": 1000,
+            "active": true
+          }
+        },
+        {
+          "address": 65535,
+          "table": "co",
+          "data_type": "bool",
+          "endian": "big",
+          "name": "Coil End",
+          "value": 1,
+          "writable": true,
+          "auto_gen": {
+            "enabled": true,
+            "mode": "Random",
+            "min": 0,
+            "max": 1,
+            "step": 1,
+            "interval": 1000,
+            "active": true
+          }
+        },
+        {
+          "address": 32767,
+          "table": "co",
+          "data_type": "bool",
+          "endian": "big",
+          "name": "Coil Mid",
+          "value": 1,
+          "writable": true,
+          "auto_gen": {
+            "enabled": true,
+            "mode": "Random",
+            "min": 0,
+            "max": 1,
+            "step": 1,
+            "interval": 1000,
+            "active": true
+          }
+        },
+        {
+          "address": 0,
+          "table": "di",
+          "data_type": "bool",
+          "endian": "big",
+          "name": "DI Start",
+          "value": 0,
+          "writable": true,
+          "auto_gen": {
+            "enabled": true,
+            "mode": "Toggle",
+            "min": 0,
+            "max": 1,
+            "step": 1,
+            "interval": 1000,
+            "active": true
+          }
+        },
+        {
+          "address": 65535,
+          "table": "di",
+          "data_type": "bool",
+          "endian": "big",
+          "name": "DI End",
+          "value": 1,
+          "writable": true,
+          "auto_gen": {
+            "enabled": true,
+            "mode": "Toggle",
+            "min": 0,
+            "max": 1,
+            "step": 1,
+            "interval": 1000,
+            "active": true
+          }
+        },
+        {
+          "address": 32767,
+          "table": "di",
+          "data_type": "bool",
+          "endian": "big",
+          "name": "DI Mid",
+          "value": 1,
+          "writable": true,
+          "auto_gen": {
+            "enabled": true,
+            "mode": "Toggle",
+            "min": 0,
+            "max": 1,
+            "step": 1,
+            "interval": 1000,
+            "active": true
+          }
+        },
+        {
+          "address": 0,
+          "table": "ir",
+          "data_type": "uint16",
+          "endian": "big",
+          "name": "IR Start",
+          "value": 53,
+          "writable": true,
+          "auto_gen": {
+            "enabled": true,
+            "mode": "Random",
+            "min": 0,
+            "max": 100,
+            "step": 1,
+            "interval": 1000,
+            "active": true
+          }
+        },
+        {
+          "address": 65535,
+          "table": "ir",
+          "data_type": "uint16",
+          "endian": "big",
+          "name": "IR End",
+          "value": 0,
+          "writable": true,
+          "auto_gen": {
+            "enabled": true,
+            "mode": "Toggle",
+            "min": 0,
+            "max": 100,
+            "step": 1,
+            "interval": 1000,
+            "active": true
+          }
+        },
+        {
+          "address": 32767,
+          "table": "ir",
+          "data_type": "uint16",
+          "endian": "big",
+          "name": "IR Mid",
+          "value": 1,
+          "writable": true,
+          "auto_gen": {
+            "enabled": true,
+            "mode": "Toggle",
+            "min": 0,
+            "max": 100,
+            "step": 1,
+            "interval": 1000,
+            "active": true
           }
         }
       ],
@@ -62,7 +458,7 @@
     }
   ],
   "settings": {
-    "auto_refresh": false,
-    "refresh_interval": 1000
+    "auto_refresh": true,
+    "refresh_interval": 100
   }
 }

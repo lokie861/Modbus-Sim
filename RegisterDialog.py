@@ -8,7 +8,7 @@ class RegisterDialog(QtWidgets.QDialog):
         layout = QtWidgets.QFormLayout(self)
         
         self.addr = QtWidgets.QSpinBox()
-        self.addr.setRange(0, 9999)
+        self.addr.setRange(0, 999999)
 
         self.table = QtWidgets.QComboBox()
         self.table.addItems(['co', 'di', 'hr', 'ir'])
@@ -32,7 +32,7 @@ class RegisterDialog(QtWidgets.QDialog):
         
         # String length field (add this)
         self.string_length = QtWidgets.QSpinBox()
-        self.string_length.setRange(1, 100)
+        # self.string_length.setRange(1, 100)
         self.string_length.setValue(10)
         self.string_length.setToolTip('Number of registers for string storage')
         self.string_length.setVisible(False)
@@ -134,8 +134,8 @@ class RegisterDialog(QtWidgets.QDialog):
                 self.string_length.setValue(regs.get('string_length', 10))
             
             if regs.get('data_type') == 'bool':
-                self.auto_gen_min.isEnabled(False)
-                self.auto_gen_max.isEnabled(False)
+                self.auto_gen_min.setEnabled(False)
+                self.auto_gen_max.setEnabled(False)
 
             # Load auto-gen settings
             auto_gen = regs.get('auto_gen', {})

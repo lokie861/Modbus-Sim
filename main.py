@@ -6,6 +6,8 @@ Features:
 - Add registers with multiple data types (uint16, int32, uint32, float32, int64, uint64, double64, string)
 - Big/Little endian support for multi-register data types
 - Auto-refresh option to continuously update register values
+- Auto value generation modes: Random, Increment, Decrement, Toggle
+- Configurable generation parameters: min/max, step size, interval
 - Start/Stop slaves; interactive table to view and control register values.
 - Save/load full simulator configuration to custom .mbsim format (JSON-based)
 
@@ -24,21 +26,35 @@ python enhanced_modbus_simulator.py
 
 import sys
 import json
-import threading
+import os
 from functools import partial
 from Converstion import TypeConversions
 from SalveHandler import SlaveRuntime, SlaveDialog
 from RegisterDialog import RegisterDialog
 from PyQt5 import QtWidgets, QtCore
+from PyQt5.QtGui import QIcon
 from serial.tools import list_ports
+
+
+BASE_PATH = None
+DEBUG_MODE = None
+
+if getattr(sys, 'frozen', False):
+    # Running in PyInstaller bundle
+    BASE_PATH = sys._MEIPASS
+    DEBUG_MODE = False
+else:
+    # Running as script or unpacked/
+    BASE_PATH = os.getcwd()
 
 # --------------------- PyQt GUI ---------------------
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('PyQt5 Modbus Simulator - Enhanced')
+        self.setWindowTitle('Modbus-Sim')
         self.resize(1400, 800)
         self.showMaximized()
+        self.setWindowIcon(QIcon(os.path.join(BASE_PATH,"logo","Modbus-Sim-Orignial-Logo.ico")))
         
         # state
         self.slaves = []
@@ -459,7 +475,12 @@ class MainWindow(QtWidgets.QMainWindow):
         inverse = (endian == 'big')
         
         try:
-            if data_type == 'uint16':
+            if data_type == 'bool':
+                value = str(value)
+                if isinstance(value, str):
+                    value = value.strip().lower() in ["1", "true", "yes", "on"]
+                rt.set_register(table, addr, 1 if value else 0)
+            elif data_type == 'uint16':
                 rt.set_register(table, addr, int(value))
             elif data_type == 'int32':
                 words = self.converter.from_int32(int(value), inverse)
@@ -503,6 +524,9 @@ class MainWindow(QtWidgets.QMainWindow):
         inverse = (endian == 'big')
         
         try:
+            if data_type == 'bool':
+                v = rt.get_register(table, addr)
+                return int(bool(v))
             if data_type == 'uint16':
                 return rt.get_register(table, addr)
             
@@ -1028,14 +1052,12 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, 'Error', f'Failed to save:\n{e}')
 
-    def load_config(self,path=None):
-        if path is None:
-            fname, _ = QtWidgets.QFileDialog.getOpenFileName(
-                self, 'Load Configuration', '', 'Modbus Simulator Files (*.mbsim);;JSON Files (*.json);;All Files (*)'
-            )
-        else:
-            fname=path
-            
+    def load_config(self):
+
+        fname, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, 'Load Configuration', '', 'Modbus Simulator Files (*.mbsim);;JSON Files (*.json);;All Files (*)'
+        )
+
         if not fname:
             return
         try:
@@ -1079,7 +1101,7 @@ def main():
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle('Fusion')
     w = MainWindow()
-    w.load_config(r'D:\Personal Projects\Modbus-Sim\da.mbsim')
+    # w.load_config(r'D:\Personal Projects\Modbus-Sim\da.mbsim')
     w.show()
     sys.exit(app.exec_())
 
