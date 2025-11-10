@@ -41,7 +41,7 @@ class SlaveRuntime(QtCore.QObject):
         self._stop_event.set()
         ServerStop()
         # Wait for graceful shutdown
-        if self._shutdown_complete.wait(timeout=0.1):
+        if self._shutdown_complete.wait(timeout=0.02):
             print("Server shutdown gracefully")
         else:
             print("WARNING: Server shutdown timeout")
@@ -53,7 +53,7 @@ class SlaveRuntime(QtCore.QObject):
             if self._thread.is_alive():
                 print("WARNING: worker thread still alive after join timeout")
 
-        time.sleep(0.1)  # allow COM port release
+        # time.sleep(0.02)  # allow COM port release
         self.status_changed.emit("stopped")
         print("Stop complete")
 
