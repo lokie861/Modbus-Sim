@@ -461,7 +461,7 @@ class MainWindow(QtWidgets.QMainWindow):
     def get_register_size(self, data_type):
         """Return number of registers needed for data type"""
         sizes = {
-            'uint16': 1, 'int32': 2, 'uint32': 2, 'float32': 2,
+            'uint16': 1, 'int16' : 1, 'int32': 2, 'uint32': 2, 'float32': 2,
             'int64': 4, 'uint64': 4, 'double64': 4
         }
         return sizes.get(data_type, 1)
@@ -482,6 +482,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 rt.set_register(table, addr, 1 if value else 0)
             elif data_type == 'uint16':
                 rt.set_register(table, addr, int(value))
+            elif data_type == 'int16':
+                words = self.converter.from_int16(int(value))
+                rt.set_register(table, addr, words[0])
             elif data_type == 'int32':
                 words = self.converter.from_int32(int(value), inverse)
                 for i, w in enumerate(words):
@@ -530,6 +533,9 @@ class MainWindow(QtWidgets.QMainWindow):
             if data_type == 'uint16':
                 return rt.get_register(table, addr)
             
+            if data_type == 'int16':
+                w = rt.get_register(table, addr)
+                return self.converter.to_int16([w], 0)
             size = self.get_register_size(data_type)
             words = []
             for i in range(size):

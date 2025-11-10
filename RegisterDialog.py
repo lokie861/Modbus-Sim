@@ -21,7 +21,7 @@ class RegisterDialog(QtWidgets.QDialog):
         
         self.data_type = QtWidgets.QComboBox()
         self.data_type.addItems([
-            'uint16', 'int32', 'uint32', 'float32',
+            'uint16', 'int16', 'int32', 'uint32', 'float32',
             'int64', 'uint64', 'double64', 'string', 'bool'
         ])
         self.data_type.currentTextChanged.connect(self.on_data_type_changed)
@@ -196,7 +196,7 @@ class RegisterDialog(QtWidgets.QDialog):
 
     def on_data_type_changed(self, dtype):
         sizes = {
-            'uint16': 1, 'int32': 2, 'uint32': 2, 'float32': 2,
+            'uint16': 1, 'int16': 1 , 'int32': 2, 'uint32': 2, 'float32': 2,
             'int64': 4, 'uint64': 4, 'double64': 4
         }
         

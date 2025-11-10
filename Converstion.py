@@ -16,6 +16,16 @@ class TypeConversions():
         words = list(struct.unpack(f'>{count}H', raw))
         return words[::-1] if inverse else words
 
+     # === 16-bit SIGNED INTEGER ===
+    def to_int16(self, data: List[int], index: int = 0) -> int:
+        """Convert one 16-bit register to a signed int16."""
+        w = data[index] & 0xFFFF
+        return struct.unpack('>h', struct.pack('>H', w))[0]
+
+    def from_int16(self, value: int) -> List[int]:
+        """Convert a signed int16 into one 16-bit register (u16)."""
+        return [struct.unpack('>H', struct.pack('>h', value))[0]]
+    
     # === 32-bit FLOAT ===
     def to_float32(self, data: List[int], index: int = 0, inverse: bool = True) -> float:
         return round(struct.unpack('>f', self._read_words(data, 2, index, inverse))[0], 3)
