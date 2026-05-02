@@ -38,9 +38,9 @@ Name: "{userdesktop}\Modbus-Sim"; Filename: "{app}\Modbus-Sim.exe"; WorkingDir: 
 
 [Registry]
 ; Add startup entry (HKCU - per-user)
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
-  ValueName: "Modbus-Sim"; ValueType: string; \
-  ValueData: """{app}\Modbus-Sim_Startup.bat"""; Flags: uninsdeletevalue
+;Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; \
+;  ValueName: "Modbus-Sim"; ValueType: string; \
+;  ValueData: """{app}\Modbus-Sim_Startup.bat"""; Flags: uninsdeletevalue
 
 ; Per-user app metadata key
 Root: HKCU; Subkey: "SOFTWARE\Modbus-Sim"; ValueType: string; ValueName: "version"; ValueData: "0.2.1"; Flags: uninsdeletekeyifempty uninsdeletevalue
