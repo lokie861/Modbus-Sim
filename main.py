@@ -53,6 +53,21 @@ FIX 3      – Every table row now stores the ORIGINAL register list index in
              correctly.
 """
 
+"""
+Patches applied to MainWindow (drop-in replacement methods):
+
+FIX 1 & 2  – populate_table batches all row inserts while signals/sorting are
+             suspended → O(1) redraws instead of O(n).
+             start_selected_slave writes registers in a background thread so the
+             UI never freezes while bulk-writing.
+
+FIX 3      – Every table row now stores the ORIGINAL register list index in
+             Qt.UserRole on column-0.  apply_table_row, toggle_auto_gen,
+             process_auto_gen, and refresh_table_values all resolve the real
+             index through that stored value, so search-filtered views work
+             correctly.
+"""
+
 import sys
 import json
 import os
@@ -62,7 +77,9 @@ from Converstion import TypeConversions
 from SalveHandler import SlaveRuntime, SlaveDialog
 from RegisterDialog import RegisterDialog
 from PyQt5 import QtWidgets, QtCore
-from PyQt5.QtGui import QIcon
+from PyQt5.QtGui import QIcon, QPalette, QColor
+from PyQt5.QtWidgets import QApplication
+from PyQt5.QtCore import QSettings
 from serial.tools import list_ports
 
 
@@ -88,6 +105,9 @@ class MainWindow(QtWidgets.QMainWindow):
         self.slaves = []
         self.runtimes = {}
         self.converter = TypeConversions()
+
+        # Restore saved theme (default: light)
+        self._dark_mode = QSettings("ModbusSim", "ModbusSim").value("dark_mode", False, type=bool)
 
         self.auto_gen_timer = QtCore.QTimer()
         self.auto_gen_timer.timeout.connect(self.process_auto_gen)
@@ -150,6 +170,12 @@ class MainWindow(QtWidgets.QMainWindow):
         load_btn = QtWidgets.QPushButton('📂 Load Config')
         load_btn.clicked.connect(self.load_config)
         left.addWidget(load_btn)
+
+        left.addWidget(QtWidgets.QLabel(''))  # spacer
+
+        self._theme_btn = QtWidgets.QPushButton('🌙 Dark Mode')
+        self._theme_btn.clicked.connect(self.toggle_theme)
+        left.addWidget(self._theme_btn)
 
         right = QtWidgets.QVBoxLayout()
         h.addLayout(right, 4)
@@ -518,52 +544,126 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:
             print(f"Error writing register: {e}")
 
-    def read_register_value(self, rt, reg):
-        table = reg['table']
-        addr = int(reg['address'])
+    def read_register_value(self, rt, reg, raw_cache=None):
+        """
+        Decode one register's typed value.
+
+        raw_cache: optional dict  {(table, addr): word_value}
+                   pre-filled by _bulk_read_cache().  When supplied, no
+                   individual get_register() call is made – we just slice
+                   the cache.  When None, falls back to the old per-word path
+                   (used by single-register calls such as _end_edit_grace).
+        """
+        table    = reg['table']
+        addr     = int(reg['address'])
         data_type = reg.get('data_type', 'uint16')
-        endian = reg.get('endian', 'big')
-        inverse = (endian == 'big')
+        endian   = reg.get('endian', 'big')
+        inverse  = (endian == 'big')
+
+        def _word(offset=0):
+            """Return one raw word, from cache or live."""
+            if raw_cache is not None:
+                return raw_cache.get((table, addr + offset))
+            return rt.get_register(table, addr + offset)
+
+        def _words(count):
+            ws = [_word(i) for i in range(count)]
+            return None if any(w is None for w in ws) else ws
+
         try:
             if data_type == 'bool':
-                v = rt.get_register(table, addr)
-                return int(bool(v))
+                w = _word()
+                return None if w is None else int(bool(w))
             if data_type == 'uint16':
-                return rt.get_register(table, addr)
+                return _word()
             if data_type == 'int16':
-                w = rt.get_register(table, addr)
-                return self.converter.to_int16([w], 0)
-            size = self.get_register_size(data_type)
-            words = []
-            for i in range(size):
-                w = rt.get_register(table, addr + i)
-                if w is None:
-                    return None
-                words.append(w)
-            if data_type == 'int32':
-                return self.converter.to_int32(words, 0, inverse)
-            elif data_type == 'uint32':
-                return self.converter.to_uint32(words, 0, inverse)
-            elif data_type == 'float32':
-                return self.converter.to_float32(words, 0, inverse)
-            elif data_type == 'int64':
-                return self.converter.to_long64(words, 0, inverse)
-            elif data_type == 'uint64':
-                return self.converter.to_ulong64(words, 0, inverse)
-            elif data_type == 'double64':
-                return self.converter.to_double64(words, 0, inverse)
-            elif data_type == 'string':
+                w = _word()
+                return None if w is None else self.converter.to_int16([w], 0)
+
+            if data_type == 'string':
                 str_len = reg.get('string_length', 10)
-                words = []
-                for i in range(str_len):
-                    w = rt.get_register(table, addr + i)
-                    if w is None:
-                        return None
-                    words.append(w)
-                return self.converter.to_string(words, inverse)
+                ws = _words(str_len)
+                return None if ws is None else self.converter.to_string(ws, inverse)
+
+            size = self.get_register_size(data_type)
+            ws   = _words(size)
+            if ws is None:
+                return None
+
+            decode = {
+                'int32':    lambda: self.converter.to_int32(ws, 0, inverse),
+                'uint32':   lambda: self.converter.to_uint32(ws, 0, inverse),
+                'float32':  lambda: self.converter.to_float32(ws, 0, inverse),
+                'int64':    lambda: self.converter.to_long64(ws, 0, inverse),
+                'uint64':   lambda: self.converter.to_ulong64(ws, 0, inverse),
+                'double64': lambda: self.converter.to_double64(ws, 0, inverse),
+            }
+            fn = decode.get(data_type)
+            return fn() if fn else None
         except Exception as e:
             print(f"Error reading register: {e}")
             return None
+
+    # ── bulk-read helpers ────────────────────────────────────────────────────
+
+    _FX_MAP = {'co': 1, 'di': 2, 'hr': 3, 'ir': 4}
+
+    def _bulk_read_cache(self, rt, regs: list) -> dict:
+        """
+        Issue one getValues() call per (table, contiguous-range) group and
+        return a flat  {(table, addr): word}  dict covering every address
+        needed by the supplied register list.
+
+        Strategy
+        --------
+        1.  For each Modbus table (co/di/hr/ir) collect every raw address
+            that any register in *regs* needs (multi-word types occupy
+            several addresses).
+        2.  Find the min/max address per table and read the whole span in a
+            single store.getValues() call.
+        3.  Scatter the returned words into the cache dict.
+
+        This replaces O(n_words) individual get_register() calls with at
+        most 4 bulk reads (one per table), regardless of how many registers
+        are displayed.
+        """
+        from collections import defaultdict
+
+        # Build: table -> sorted list of every raw address needed
+        needed = defaultdict(set)
+        for reg in regs:
+            tbl   = reg['table']
+            start = int(reg['address'])
+            dtype = reg.get('data_type', 'uint16')
+            size  = (reg.get('string_length', 10)
+                     if dtype == 'string'
+                     else self.get_register_size(dtype))
+            for off in range(size):
+                needed[tbl].add(start + off)
+
+        cache = {}
+        store = rt.context.store          # ModbusSlaveContext
+
+        for tbl, addrs in needed.items():
+            fx = self._FX_MAP.get(tbl)
+            if fx is None:
+                continue
+            lo  = min(addrs)
+            hi  = max(addrs)
+            count = hi - lo + 1
+            try:
+                raw = store.getValues(fx, lo, count=count)
+                # raw is a list of *count* words starting at address lo
+                for i, word in enumerate(raw):
+                    cache[(tbl, lo + i)] = int(word)
+            except Exception as e:
+                print(f"Bulk read failed for {tbl}[{lo}:{hi}]: {e}")
+                # fall back: mark all addresses as None so read_register_value
+                # gracefully returns None for this table range
+                for a in addrs:
+                    cache.setdefault((tbl, a), None)
+
+        return cache
 
     # ── register management ───────────────────────────────────────────────────
 
@@ -980,6 +1080,10 @@ class MainWindow(QtWidgets.QMainWindow):
             )
 
     def refresh_table_values(self, silent=False):
+        """
+        Refresh all visible register values using a single bulk read per
+        Modbus table instead of one get_register() call per word.
+        """
         if self.is_editing_cell:
             return
         cur = self.slave_list.currentRow()
@@ -991,20 +1095,44 @@ class MainWindow(QtWidgets.QMainWindow):
             if not silent:
                 QtWidgets.QMessageBox.information(self, 'Info', 'Slave is not running')
             return
+
         regs = slave.get('registers', [])
+
+        # Collect only the registers that are visible and not in grace/edit
+        rows_to_refresh = []
+        regs_to_read   = []
         for visual_row in range(self.table.rowCount()):
             if self.current_edit_row is not None and visual_row == self.current_edit_row:
                 continue
             if visual_row in self.edit_grace_timers:
                 continue
-            orig = self._orig_index_for_row(visual_row)   # FIX 3
+            orig = self._orig_index_for_row(visual_row)
             if orig >= len(regs):
                 continue
-            reg = regs[orig]
-            v = self.read_register_value(rt, reg)
-            if v is not None:
-                reg['value'] = v
-                self._set_cell_text_safe(visual_row, 5, v)
+            rows_to_refresh.append((visual_row, orig))
+            regs_to_read.append(regs[orig])
+
+        if not regs_to_read:
+            return
+
+        # ONE bulk read covering every needed address across all tables
+        cache = self._bulk_read_cache(rt, regs_to_read)
+
+        # Decode and update the table
+        self.table.blockSignals(True)
+        try:
+            for (visual_row, orig), reg in zip(rows_to_refresh, regs_to_read):
+                v = self.read_register_value(rt, reg, raw_cache=cache)
+                if v is not None:
+                    reg['value'] = v
+                    item = self.table.item(visual_row, 5)
+                    if item is None:
+                        item = QtWidgets.QTableWidgetItem()
+                        self.table.setItem(visual_row, 5, item)
+                    item.setText(str(v))
+        finally:
+            self.table.blockSignals(False)
+
         if not silent:
             self.statusBar().showMessage('Values refreshed from running slave')
 
@@ -1041,6 +1169,68 @@ class MainWindow(QtWidgets.QMainWindow):
 
         if not silent:
             self.statusBar().showMessage(f"Filtered: {visible} matches")
+
+
+    # ── theme ─────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _dark_palette() -> QPalette:
+        """Return a complete dark QPalette for the Fusion style."""
+        p = QPalette()
+        # Base colours
+        dark    = QColor(35,  35,  35)
+        mid     = QColor(50,  50,  50)
+        lighter = QColor(70,  70,  70)
+        text    = QColor(220, 220, 220)
+        hi      = QColor(42,  130, 218)       # accent / selection
+        dis     = QColor(127, 127, 127)
+
+        p.setColor(QPalette.Window,          dark)
+        p.setColor(QPalette.WindowText,      text)
+        p.setColor(QPalette.Base,            QColor(25, 25, 25))
+        p.setColor(QPalette.AlternateBase,   mid)
+        p.setColor(QPalette.ToolTipBase,     QColor(25, 25, 25))
+        p.setColor(QPalette.ToolTipText,     text)
+        p.setColor(QPalette.Text,            text)
+        p.setColor(QPalette.Button,          mid)
+        p.setColor(QPalette.ButtonText,      text)
+        p.setColor(QPalette.BrightText,      QColor(255, 80, 80))
+        p.setColor(QPalette.Link,            hi)
+        p.setColor(QPalette.Highlight,       hi)
+        p.setColor(QPalette.HighlightedText, QColor(0, 0, 0))
+
+        # Disabled state
+        p.setColor(QPalette.Disabled, QPalette.Text,       dis)
+        p.setColor(QPalette.Disabled, QPalette.ButtonText, dis)
+        p.setColor(QPalette.Disabled, QPalette.WindowText, dis)
+        p.setColor(QPalette.Disabled, QPalette.Highlight,  lighter)
+
+        # Extra roles that affect table grid lines, borders, etc.
+        p.setColor(QPalette.Mid,       lighter)
+        p.setColor(QPalette.Dark,      QColor(18, 18, 18))
+        p.setColor(QPalette.Shadow,    QColor(10, 10, 10))
+        p.setColor(QPalette.Light,     QColor(80, 80, 80))
+        return p
+
+    @staticmethod
+    def _light_palette() -> QPalette:
+        """Return the default Fusion light palette (Qt built-in)."""
+        return QApplication.style().standardPalette()
+
+    def apply_theme(self, dark: bool):
+        """Switch application palette and persist the choice."""
+        self._dark_mode = dark
+        QApplication.instance().setPalette(
+            self._dark_palette() if dark else self._light_palette()
+        )
+        # Update button text to show the opposite action
+        icon = "☀️ Light Mode" if dark else "🌙 Dark Mode"
+        self._theme_btn.setText(icon)
+        # Persist
+        QSettings("ModbusSim", "ModbusSim").setValue("dark_mode", dark)
+
+    def toggle_theme(self):
+        self.apply_theme(not self._dark_mode)
 
     # ── save / load ───────────────────────────────────────────────────────────
 
@@ -1106,6 +1296,8 @@ def main():
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle('Fusion')
     w = MainWindow()
+    # Apply persisted theme AFTER the window is fully constructed
+    w.apply_theme(w._dark_mode)
     w.show()
     sys.exit(app.exec_())
 
