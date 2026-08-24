@@ -10,6 +10,7 @@ Features:
 - Configurable generation parameters: min/max, step size, interval
 - Start/Stop slaves; interactive table to view and control register values.
 - Save/load full simulator configuration to custom .mbsim format (JSON-based)
+- File association: double-clicking a .mbsim file opens and loads it automatically
 
 Requirements:
 - Python 3.8+
@@ -22,50 +23,7 @@ pip install pyqt5 pymodbus pyserial
 
 Run:
 python enhanced_modbus_simulator.py
-"""
-
-"""
-Patches applied to MainWindow (drop-in replacement methods):
-
-FIX 1 & 2  – populate_table batches all row inserts while signals/sorting are
-             suspended → O(1) redraws instead of O(n).
-             start_selected_slave writes registers in a background thread so the
-             UI never freezes while bulk-writing.
-
-FIX 3      – Every table row now stores the ORIGINAL register list index in
-             Qt.UserRole on column-0.  apply_table_row, toggle_auto_gen,
-             process_auto_gen, and refresh_table_values all resolve the real
-             index through that stored value, so search-filtered views work
-             correctly.
-"""
-"""
-Patches applied to MainWindow (drop-in replacement methods):
-
-FIX 1 & 2  – populate_table batches all row inserts while signals/sorting are
-             suspended → O(1) redraws instead of O(n).
-             start_selected_slave writes registers in a background thread so the
-             UI never freezes while bulk-writing.
-
-FIX 3      – Every table row now stores the ORIGINAL register list index in
-             Qt.UserRole on column-0.  apply_table_row, toggle_auto_gen,
-             process_auto_gen, and refresh_table_values all resolve the real
-             index through that stored value, so search-filtered views work
-             correctly.
-"""
-
-"""
-Patches applied to MainWindow (drop-in replacement methods):
-
-FIX 1 & 2  – populate_table batches all row inserts while signals/sorting are
-             suspended → O(1) redraws instead of O(n).
-             start_selected_slave writes registers in a background thread so the
-             UI never freezes while bulk-writing.
-
-FIX 3      – Every table row now stores the ORIGINAL register list index in
-             Qt.UserRole on column-0.  apply_table_row, toggle_auto_gen,
-             process_auto_gen, and refresh_table_values all resolve the real
-             index through that stored value, so search-filtered views work
-             correctly.
+python enhanced_modbus_simulator.py path/to/config.mbsim
 """
 
 import sys
@@ -122,14 +80,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.search_box.setPlaceholderText('Search registers...')
 
         # Debounce: wait 200 ms after the user stops typing before filtering.
-        # This means fast typing never triggers more than one rebuild.
         self._search_debounce = QtCore.QTimer(self)
         self._search_debounce.setSingleShot(True)
         self._search_debounce.setInterval(200)
         self._search_debounce.timeout.connect(self.search_refresh_table_values)
         self.search_box.textChanged.connect(self._search_debounce.start)
 
-        # ── UI layout (unchanged from original) ──────────────────────────────
+        # ── UI layout ──────────────────────────────────────────────────────────
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
         h = QtWidgets.QHBoxLayout(central)
@@ -235,7 +192,62 @@ class MainWindow(QtWidgets.QMainWindow):
         self.statusBar().showMessage('Ready')
         self.slave_list.currentItemChanged.connect(self.on_slave_selected)
 
-    # ── helpers ──────────────────────────────────────────────────────────────
+        # ── File association: load .mbsim passed as argv[1] ───────────────────
+        # Use a zero-delay timer so the window is fully shown before any
+        # message boxes or status-bar updates triggered by the load appear.
+        QtCore.QTimer.singleShot(0, self._load_from_argv)
+
+    # ── command-line / file-association support ───────────────────────────────
+
+    def _load_from_argv(self):
+        """
+        Called once after the event loop starts.
+        If the app was launched by double-clicking a .mbsim file,
+        Windows passes the file path as sys.argv[1].
+        """
+        if len(sys.argv) < 2:
+            return
+        path = sys.argv[1]
+        if os.path.isfile(path) and path.lower().endswith('.mbsim'):
+            self.load_config_from_path(path)
+
+    def load_config_from_path(self, fname: str):
+        """
+        Load a .mbsim config from an absolute path.
+        Shared by the Load Config button and the argv handler so
+        there is exactly one code path that parses the file.
+        """
+        try:
+            with open(fname, 'r') as f:
+                config = json.load(f)
+
+            # Stop any running slaves before replacing config
+            for rt in list(self.runtimes.values()):
+                rt.stop()
+            self.runtimes.clear()
+
+            self.slaves = config.get('slaves', [])
+            settings = config.get('settings', {})
+
+            if 'auto_refresh' in settings:
+                self.auto_refresh_check.setChecked(settings['auto_refresh'])
+            if 'refresh_interval' in settings:
+                self.refresh_interval.setValue(settings['refresh_interval'])
+
+            self.update_slave_list()
+            self.table.setRowCount(0)
+            self.current_label.setText('<i>Select a slave to edit registers</i>')
+
+            version = config.get('version', '1.0')
+            self.statusBar().showMessage(
+                f"Loaded: {os.path.basename(fname)}  (v{version})"
+            )
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(
+                self, 'Error', f'Failed to load:\n{fname}\n\n{e}'
+            )
+
+    # ── helpers ───────────────────────────────────────────────────────────────
 
     def _set_cell_text_safe(self, row, col, text):
         """Set cell text without triggering itemChanged."""
@@ -249,16 +261,15 @@ class MainWindow(QtWidgets.QMainWindow):
         finally:
             self.table.blockSignals(False)
 
-    # FIX 3 – resolve the ORIGINAL register index stored in col-0 UserRole
     def _orig_index_for_row(self, visual_row: int):
         """Return the original slave['registers'] index for a visible table row."""
         item = self.table.item(visual_row, 0)
         if item is None:
-            return visual_row          # fallback (should not happen)
+            return visual_row
         data = item.data(QtCore.Qt.UserRole)
         return data if data is not None else visual_row
 
-    # ── edit-grace helpers (unchanged) ───────────────────────────────────────
+    # ── edit-grace helpers ────────────────────────────────────────────────────
 
     def on_possible_edit_start(self, item):
         pass
@@ -305,7 +316,7 @@ class MainWindow(QtWidgets.QMainWindow):
         rt = self.runtimes.get(slave['name'])
         if not rt:
             return
-        orig = self._orig_index_for_row(row)   # FIX 3
+        orig = self._orig_index_for_row(row)
         regs = slave.get('registers', [])
         if orig < 0 or orig >= len(regs):
             return
@@ -315,7 +326,7 @@ class MainWindow(QtWidgets.QMainWindow):
             reg['value'] = v
             self._set_cell_text_safe(row, 5, v)
 
-    # ── auto-refresh ─────────────────────────────────────────────────────────
+    # ── auto-refresh ──────────────────────────────────────────────────────────
 
     def toggle_auto_refresh(self, state):
         self.auto_refresh_enabled = (state == QtCore.Qt.Checked)
@@ -334,7 +345,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.slave_list.currentRow() >= 0:
             self.refresh_table_values(silent=True)
 
-    # ── slave management ─────────────────────────────────────────────────────
+    # ── slave management ──────────────────────────────────────────────────────
 
     def add_slave_dialog(self):
         dlg = SlaveDialog(self)
@@ -389,7 +400,6 @@ class MainWindow(QtWidgets.QMainWindow):
         if slave.get('type') == 'tcp':
             dlg.tcp_host.setText(slave.get('host', '0.0.0.0'))
             dlg.tcp_port.setValue(int(slave.get('port', 5020)))
-            dlg.tcp_timout.setValue(int(slave.get('timeout', 1)))
         else:
             existing_port = slave.get('port', 'COM1')
             if existing_port not in ports:
@@ -410,7 +420,6 @@ class MainWindow(QtWidgets.QMainWindow):
             self.populate_table(data)
             self.statusBar().showMessage(f"Slave '{data['name']}' updated")
 
-    # ── FIX 2 – start slave without blocking the UI ───────────────────────────
     def start_selected_slave(self):
         cur = self.slave_list.currentRow()
         if cur < 0:
@@ -425,18 +434,16 @@ class MainWindow(QtWidgets.QMainWindow):
         rt = SlaveRuntime(slave)
         rt.status_changed.connect(partial(self.on_status_changed, name))
         self.runtimes[name] = rt
-        rt.start()                    # start the server first
+        rt.start()
 
         self.statusBar().showMessage(f"Starting slave: {name} – writing registers…")
         self.update_slave_list()
 
         regs = slave.get('registers', [])
 
-        # Write registers in a background thread so the UI stays responsive
         def _bulk_write():
             for reg in regs:
                 self.write_register_value(rt, reg, reg.get('value', 0))
-            # Signal the main thread that we are done
             QtCore.QMetaObject.invokeMethod(
                 self, "_on_bulk_write_done",
                 QtCore.Qt.QueuedConnection,
@@ -483,7 +490,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.update_slave_list()
         self.statusBar().showMessage(f"{name}: {status}")
 
-    # ── register data-type helpers (unchanged) ────────────────────────────────
+    # ── register data-type helpers ────────────────────────────────────────────
 
     def get_register_size(self, data_type, reg=None):
         if data_type == 'string' and reg:
@@ -548,20 +555,19 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         Decode one register's typed value.
 
-        raw_cache: optional dict  {(table, addr): word_value}
-                   pre-filled by _bulk_read_cache().  When supplied, no
-                   individual get_register() call is made – we just slice
-                   the cache.  When None, falls back to the old per-word path
-                   (used by single-register calls such as _end_edit_grace).
+        raw_cache: optional dict {(table, addr): word_value} pre-filled by
+                   _bulk_read_cache(). When supplied, no individual
+                   get_register() call is made. When None, falls back to the
+                   per-word path (used by single-register calls such as
+                   _end_edit_grace).
         """
-        table    = reg['table']
-        addr     = int(reg['address'])
+        table     = reg['table']
+        addr      = int(reg['address'])
         data_type = reg.get('data_type', 'uint16')
-        endian   = reg.get('endian', 'big')
-        inverse  = (endian == 'big')
+        endian    = reg.get('endian', 'big')
+        inverse   = (endian == 'big')
 
         def _word(offset=0):
-            """Return one raw word, from cache or live."""
             if raw_cache is not None:
                 return raw_cache.get((table, addr + offset))
             return rt.get_register(table, addr + offset)
@@ -604,32 +610,18 @@ class MainWindow(QtWidgets.QMainWindow):
             print(f"Error reading register: {e}")
             return None
 
-    # ── bulk-read helpers ────────────────────────────────────────────────────
+    # ── bulk-read helpers ─────────────────────────────────────────────────────
 
     _FX_MAP = {'co': 1, 'di': 2, 'hr': 3, 'ir': 4}
 
     def _bulk_read_cache(self, rt, regs: list) -> dict:
         """
         Issue one getValues() call per (table, contiguous-range) group and
-        return a flat  {(table, addr): word}  dict covering every address
+        return a flat {(table, addr): word} dict covering every address
         needed by the supplied register list.
-
-        Strategy
-        --------
-        1.  For each Modbus table (co/di/hr/ir) collect every raw address
-            that any register in *regs* needs (multi-word types occupy
-            several addresses).
-        2.  Find the min/max address per table and read the whole span in a
-            single store.getValues() call.
-        3.  Scatter the returned words into the cache dict.
-
-        This replaces O(n_words) individual get_register() calls with at
-        most 4 bulk reads (one per table), regardless of how many registers
-        are displayed.
         """
         from collections import defaultdict
 
-        # Build: table -> sorted list of every raw address needed
         needed = defaultdict(set)
         for reg in regs:
             tbl   = reg['table']
@@ -642,24 +634,21 @@ class MainWindow(QtWidgets.QMainWindow):
                 needed[tbl].add(start + off)
 
         cache = {}
-        store = rt.context.store          # ModbusSlaveContext
+        store = rt.context.store
 
         for tbl, addrs in needed.items():
             fx = self._FX_MAP.get(tbl)
             if fx is None:
                 continue
-            lo  = min(addrs)
-            hi  = max(addrs)
+            lo    = min(addrs)
+            hi    = max(addrs)
             count = hi - lo + 1
             try:
                 raw = store.getValues(fx, lo, count=count)
-                # raw is a list of *count* words starting at address lo
                 for i, word in enumerate(raw):
                     cache[(tbl, lo + i)] = int(word)
             except Exception as e:
                 print(f"Bulk read failed for {tbl}[{lo}:{hi}]: {e}")
-                # fall back: mark all addresses as None so read_register_value
-                # gracefully returns None for this table range
                 for a in addrs:
                     cache.setdefault((tbl, a), None)
 
@@ -676,18 +665,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.current_label.setText(f"<b>Editing registers for:</b> {slave['name']}")
         self.populate_table(slave)
 
-    # ── FIX 1 – batch populate with signals/sorting suspended ────────────────
     def populate_table(self, slave):
         """
         Rebuild the register table efficiently.
-
-        Key optimisations:
         - setSortingEnabled(False) prevents a re-sort after every insertRow.
         - blockSignals(True) stops itemChanged firing for every cell we fill.
         - setRowCount(n) pre-allocates all rows in one call.
-        - Each cell in column-0 stores the ORIGINAL list index in Qt.UserRole
-          so that search-filtered views still resolve to the right register
-          (FIX 3).
+        - Each cell in column-0 stores the ORIGINAL list index in Qt.UserRole.
         """
         regs = slave.get('registers', [])
         n = len(regs)
@@ -695,27 +679,23 @@ class MainWindow(QtWidgets.QMainWindow):
         self.table.setSortingEnabled(False)
         self.table.blockSignals(True)
         try:
-            self.table.setRowCount(0)        # clear
-            self.table.setRowCount(n)        # pre-allocate
+            self.table.setRowCount(0)
+            self.table.setRowCount(n)
 
             for orig_idx, reg in enumerate(regs):
                 self._fill_table_row(orig_idx, orig_idx, reg)
         finally:
             self.table.blockSignals(False)
-            self.table.setSortingEnabled(False)   # keep off – we don't need it
+            self.table.setSortingEnabled(False)
 
     def _fill_table_row(self, visual_row: int, orig_idx: int, reg: dict):
-        """
-        Fill one already-existing table row.  The original list index
-        (orig_idx) is stored in column-0's UserRole for FIX 3.
-        Assumes signals are already blocked by the caller.
-        """
+        """Fill one already-existing table row. Signals must be blocked by caller."""
         NON_EDIT = QtCore.Qt.ItemIsEnabled | QtCore.Qt.ItemIsSelectable
 
-        # Col 0 – Address  (stores orig_idx in UserRole)
+        # Col 0 – Address (stores orig_idx in UserRole)
         addr_item = QtWidgets.QTableWidgetItem(str(reg['address']))
         addr_item.setFlags(NON_EDIT)
-        addr_item.setData(QtCore.Qt.UserRole, orig_idx)   # ← FIX 3 anchor
+        addr_item.setData(QtCore.Qt.UserRole, orig_idx)
         self.table.setItem(visual_row, 0, addr_item)
 
         # Col 1 – Table type
@@ -738,7 +718,7 @@ class MainWindow(QtWidgets.QMainWindow):
         name_item.setFlags(NON_EDIT)
         self.table.setItem(visual_row, 4, name_item)
 
-        # Col 5 – Value  (editable)
+        # Col 5 – Value (editable)
         value_item = QtWidgets.QTableWidgetItem(str(reg.get('value', 0)))
         self.table.setItem(visual_row, 5, value_item)
 
@@ -757,7 +737,6 @@ class MainWindow(QtWidgets.QMainWindow):
         actions_layout.setContentsMargins(2, 2, 2, 2)
 
         apply_btn = QtWidgets.QPushButton('Apply')
-        # FIX 3: pass visual_row; _orig_index_for_row() resolves orig_idx inside
         apply_btn.clicked.connect(partial(self.apply_table_row, visual_row))
         actions_layout.addWidget(apply_btn)
 
@@ -791,7 +770,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.table.setCellWidget(visual_row, 7, actions_widget)
 
-    # Keep old _add_table_row as a thin wrapper so nothing external breaks
     def _add_table_row(self, reg, orig_idx=None):
         """Append one row – used by search_refresh_table_values."""
         visual_row = self.table.rowCount()
@@ -804,10 +782,10 @@ class MainWindow(QtWidgets.QMainWindow):
         finally:
             self.table.blockSignals(False)
 
-    # ── key helpers ──────────────────────────────────────────────────────────
+    # ── key helpers ───────────────────────────────────────────────────────────
 
     def _get_reg_key(self, visual_row: int):
-        """Generate unique key using the original register index (FIX 3)."""
+        """Generate unique key using the original register index."""
         cur = self.slave_list.currentRow()
         if cur < 0:
             return None
@@ -825,7 +803,7 @@ class MainWindow(QtWidgets.QMainWindow):
         reg = regs[orig_idx]
         return f"{slave['name']}_{reg['table']}_{reg['address']}"
 
-    # ── auto-gen ─────────────────────────────────────────────────────────────
+    # ── auto-gen ──────────────────────────────────────────────────────────────
 
     def toggle_auto_gen(self, visual_row: int):
         cur = self.slave_list.currentRow()
@@ -833,7 +811,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         slave = self.slaves[cur]
         regs = slave.get('registers', [])
-        orig = self._orig_index_for_row(visual_row)   # FIX 3
+        orig = self._orig_index_for_row(visual_row)
         if orig >= len(regs):
             return
         reg = regs[orig]
@@ -869,7 +847,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
         current_time = time.time() * 1000
 
-        # Iterate over visible rows, resolve orig index via UserRole (FIX 3)
         for visual_row in range(self.table.rowCount()):
             orig = self._orig_index_for_row(visual_row)
             regs = slave.get('registers', [])
@@ -974,7 +951,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 if any(addr in existing_range for addr in new_range):
                     QtWidgets.QMessageBox.warning(
                         self, 'Warning',
-                        f"Address range overlaps with existing register at {reg['table'].upper()}:{reg['address']}"
+                        f"Address range overlaps with existing register at "
+                        f"{reg['table'].upper()}:{reg['address']}"
                     )
                     return
 
@@ -983,7 +961,9 @@ class MainWindow(QtWidgets.QMainWindow):
             if rt:
                 self.write_register_value(rt, r, r.get('value', 0))
             self.populate_table(slave)
-            self.statusBar().showMessage(f"Added register: {r['table'].upper()}:{r['address']} ({r['data_type']})")
+            self.statusBar().showMessage(
+                f"Added register: {r['table'].upper()}:{r['address']} ({r['data_type']})"
+            )
 
     def remove_selected_register(self):
         cur = self.slave_list.currentRow()
@@ -996,7 +976,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         slave = self.slaves[cur]
         regs = slave.get('registers', [])
-        orig = self._orig_index_for_row(reg_row)   # FIX 3
+        orig = self._orig_index_for_row(reg_row)
         if orig >= len(regs):
             return
         reg = regs[orig]
@@ -1015,7 +995,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         slave = self.slaves[cur]
         regs = slave.get('registers', [])
-        orig = self._orig_index_for_row(reg_row)   # FIX 3
+        orig = self._orig_index_for_row(reg_row)
         if orig >= len(regs):
             return
         reg = regs[orig]
@@ -1029,14 +1009,13 @@ class MainWindow(QtWidgets.QMainWindow):
             self.populate_table(slave)
             self.statusBar().showMessage(f"Edited register: {r['table'].upper()}:{r['address']}")
 
-    # FIX 3 – apply uses orig index resolved from UserRole
     def apply_table_row(self, visual_row: int):
         cur = self.slave_list.currentRow()
         if cur < 0:
             return
         slave = self.slaves[cur]
         regs = slave.get('registers', [])
-        orig = self._orig_index_for_row(visual_row)   # FIX 3 ← core of the fix
+        orig = self._orig_index_for_row(visual_row)
         if orig >= len(regs):
             return
         reg = regs[orig]
@@ -1098,7 +1077,6 @@ class MainWindow(QtWidgets.QMainWindow):
 
         regs = slave.get('registers', [])
 
-        # Collect only the registers that are visible and not in grace/edit
         rows_to_refresh = []
         regs_to_read   = []
         for visual_row in range(self.table.rowCount()):
@@ -1115,10 +1093,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if not regs_to_read:
             return
 
-        # ONE bulk read covering every needed address across all tables
         cache = self._bulk_read_cache(rt, regs_to_read)
 
-        # Decode and update the table
         self.table.blockSignals(True)
         try:
             for (visual_row, orig), reg in zip(rows_to_refresh, regs_to_read):
@@ -1138,9 +1114,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def search_refresh_table_values(self, silent: bool = False):
         """
-        Filter the table by hiding/showing existing rows – no widgets are
-        created or destroyed, so this is near-instant regardless of list size.
-        Falls back to showing all rows when the search box is cleared.
+        Filter the table by hiding/showing existing rows.
+        No widgets are created or destroyed – near-instant regardless of list size.
         """
         search_text = self.search_box.text().strip().lower()
         current_index = self.slave_list.currentRow()
@@ -1149,13 +1124,11 @@ class MainWindow(QtWidgets.QMainWindow):
         slave = self.slaves[current_index]
 
         if not search_text:
-            # Reveal every row – no rebuild needed
             for row in range(self.table.rowCount()):
                 self.table.showRow(row)
             self.statusBar().showMessage(f"{self.table.rowCount()} registers")
             return
 
-        # Hide/show rows in-place – no QTableWidgetItem or QWidget is created
         visible = 0
         regs = slave.get('registers', [])
         for visual_row in range(self.table.rowCount()):
@@ -1170,19 +1143,17 @@ class MainWindow(QtWidgets.QMainWindow):
         if not silent:
             self.statusBar().showMessage(f"Filtered: {visible} matches")
 
-
     # ── theme ─────────────────────────────────────────────────────────────────
 
     @staticmethod
     def _dark_palette() -> QPalette:
         """Return a complete dark QPalette for the Fusion style."""
         p = QPalette()
-        # Base colours
         dark    = QColor(35,  35,  35)
         mid     = QColor(50,  50,  50)
         lighter = QColor(70,  70,  70)
         text    = QColor(220, 220, 220)
-        hi      = QColor(42,  130, 218)       # accent / selection
+        hi      = QColor(42,  130, 218)
         dis     = QColor(127, 127, 127)
 
         p.setColor(QPalette.Window,          dark)
@@ -1199,17 +1170,15 @@ class MainWindow(QtWidgets.QMainWindow):
         p.setColor(QPalette.Highlight,       hi)
         p.setColor(QPalette.HighlightedText, QColor(0, 0, 0))
 
-        # Disabled state
         p.setColor(QPalette.Disabled, QPalette.Text,       dis)
         p.setColor(QPalette.Disabled, QPalette.ButtonText, dis)
         p.setColor(QPalette.Disabled, QPalette.WindowText, dis)
         p.setColor(QPalette.Disabled, QPalette.Highlight,  lighter)
 
-        # Extra roles that affect table grid lines, borders, etc.
-        p.setColor(QPalette.Mid,       lighter)
-        p.setColor(QPalette.Dark,      QColor(18, 18, 18))
-        p.setColor(QPalette.Shadow,    QColor(10, 10, 10))
-        p.setColor(QPalette.Light,     QColor(80, 80, 80))
+        p.setColor(QPalette.Mid,    lighter)
+        p.setColor(QPalette.Dark,   QColor(18, 18, 18))
+        p.setColor(QPalette.Shadow, QColor(10, 10, 10))
+        p.setColor(QPalette.Light,  QColor(80, 80, 80))
         return p
 
     @staticmethod
@@ -1223,10 +1192,7 @@ class MainWindow(QtWidgets.QMainWindow):
         QApplication.instance().setPalette(
             self._dark_palette() if dark else self._light_palette()
         )
-        # Update button text to show the opposite action
-        icon = "☀️ Light Mode" if dark else "🌙 Dark Mode"
-        self._theme_btn.setText(icon)
-        # Persist
+        self._theme_btn.setText("☀️ Light Mode" if dark else "🌙 Dark Mode")
         QSettings("ModbusSim", "ModbusSim").setValue("dark_mode", dark)
 
     def toggle_theme(self):
@@ -1236,7 +1202,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
     def save_config(self):
         fname, _ = QtWidgets.QFileDialog.getSaveFileName(
-            self, 'Save Configuration', '', 'Modbus Simulator Files (*.mbsim);;All Files (*)'
+            self, 'Save Configuration', '',
+            'Modbus Simulator Files (*.mbsim);;All Files (*)'
         )
         if not fname:
             return
@@ -1260,35 +1227,13 @@ class MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.critical(self, 'Error', f'Failed to save:\n{e}')
 
     def load_config(self):
+        """📂 Load Config button – pick a file then delegate to load_config_from_path."""
         fname, _ = QtWidgets.QFileDialog.getOpenFileName(
             self, 'Load Configuration', '',
             'Modbus Simulator Files (*.mbsim);;JSON Files (*.json);;All Files (*)'
         )
-        if not fname:
-            return
-        try:
-            with open(fname, 'r') as f:
-                config = json.load(f)
-            for name, rt in list(self.runtimes.items()):
-                rt.stop()
-            self.runtimes.clear()
-            self.slaves = config.get('slaves', [])
-            settings = config.get('settings', {})
-            if 'auto_refresh' in settings:
-                self.auto_refresh_check.setChecked(settings['auto_refresh'])
-            if 'refresh_interval' in settings:
-                self.refresh_interval.setValue(settings['refresh_interval'])
-            self.update_slave_list()
-            self.table.setRowCount(0)
-            self.current_label.setText('<i>Select a slave to edit registers</i>')
-            version = config.get('version', '1.0')
-            QtWidgets.QMessageBox.information(
-                self, 'Loaded',
-                f'Configuration loaded from:\n{fname}\nVersion: {version}'
-            )
-            self.statusBar().showMessage(f"Loaded: {fname}")
-        except Exception as e:
-            QtWidgets.QMessageBox.critical(self, 'Error', f'Failed to load:\n{e}')
+        if fname:
+            self.load_config_from_path(fname)
 
 
 # --------------------- Main ---------------------
