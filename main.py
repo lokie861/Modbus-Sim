@@ -30,6 +30,7 @@ import sys
 import json
 import os
 import threading
+from copy import deepcopy
 from functools import partial
 from Converstion import TypeConversions
 from SalveHandler import SlaveRuntime, SlaveDialog
@@ -177,6 +178,10 @@ class MainWindow(QtWidgets.QMainWindow):
         edit_reg_btn.clicked.connect(self.edit_selected_register)
         btn_layout.addWidget(edit_reg_btn)
 
+        duplicate_reg_btn = QtWidgets.QPushButton('📋 Duplicate Selected')
+        duplicate_reg_btn.clicked.connect(self.duplicate_selected_register)
+        btn_layout.addWidget(duplicate_reg_btn)
+
         remove_reg_btn = QtWidgets.QPushButton('🗑 Remove Selected')
         remove_reg_btn.clicked.connect(self.remove_selected_register)
         btn_layout.addWidget(remove_reg_btn)
@@ -185,6 +190,9 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.current_edit_row = None
         self.edit_grace_timers = {}
+        # Values typed into the table stay local until the user clicks Apply.
+        # Auto-refresh and auto-generation must not replace those pending edits.
+        self.pending_edit_keys = set()
         self.table.itemDoubleClicked.connect(self.on_edit_start)
         self.table.itemClicked.connect(self.on_possible_edit_start)
         self.table.itemChanged.connect(self.on_item_changed_safe)
@@ -285,9 +293,12 @@ class MainWindow(QtWidgets.QMainWindow):
             timer.deleteLater()
 
     def on_item_changed_safe(self, item):
-        if item is None:
+        if item is None or item.column() != 5:
             return
         row = item.row()
+        key = self._get_reg_key(row)
+        if key:
+            self.pending_edit_keys.add(key)
         if self.current_edit_row == row:
             self.current_edit_row = None
             self._start_edit_grace(row)
@@ -321,6 +332,8 @@ class MainWindow(QtWidgets.QMainWindow):
         if orig < 0 or orig >= len(regs):
             return
         reg = regs[orig]
+        if self._get_reg_key(row) in self.pending_edit_keys:
+            return
         v = self.read_register_value(rt, reg)
         if v is not None:
             reg['value'] = v
@@ -545,9 +558,13 @@ class MainWindow(QtWidgets.QMainWindow):
             elif data_type == 'string':
                 str_len = reg.get('string_length', 10)
                 words = self.converter.from_string(str(value), inverse)
-                for i, w in enumerate(words):
-                    if i < str_len:
-                        rt.set_register(table, addr + i, w)
+                # Always write the complete allocated range.  Without this,
+                # shortening a string leaves words from the previous value
+                # behind (for example, a 10-register value replaced by a
+                # 5-register value).
+                for i in range(str_len):
+                    word = words[i] if i < len(words) else 0
+                    rt.set_register(table, addr + i, word)
         except Exception as e:
             print(f"Error writing register: {e}")
 
@@ -861,6 +878,8 @@ class MainWindow(QtWidgets.QMainWindow):
             key = self._get_reg_key_by_orig(orig)
             if not key:
                 continue
+            if key in self.pending_edit_keys:
+                continue
             state = self.auto_gen_states.get(key)
             if not state:
                 continue
@@ -927,7 +946,10 @@ class MainWindow(QtWidgets.QMainWindow):
 
     @property
     def is_editing_cell(self):
-        return self.current_edit_row is not None
+        return (
+            self.current_edit_row is not None
+            or self.table.state() == QtWidgets.QAbstractItemView.EditingState
+        )
 
     # ── register CRUD ─────────────────────────────────────────────────────────
 
@@ -980,6 +1002,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if orig >= len(regs):
             return
         reg = regs[orig]
+        self.pending_edit_keys.discard(self._get_reg_key_by_orig(orig))
         del regs[orig]
         self.populate_table(slave)
         self.statusBar().showMessage(f"Removed register: {reg['table'].upper()}:{reg['address']}")
@@ -999,15 +1022,74 @@ class MainWindow(QtWidgets.QMainWindow):
         if orig >= len(regs):
             return
         reg = regs[orig]
+        old_key = self._get_reg_key_by_orig(orig)
         dlg = RegisterDialog(self, reg)
         if dlg.exec_() == QtWidgets.QDialog.Accepted:
             r = dlg.get_data()
             regs[orig] = r
+            self.pending_edit_keys.discard(old_key)
+            self.pending_edit_keys.discard(self._get_reg_key_by_orig(orig))
             rt = self.runtimes.get(slave['name'])
             if rt:
                 self.write_register_value(rt, r, r.get('value', 0))
             self.populate_table(slave)
             self.statusBar().showMessage(f"Edited register: {r['table'].upper()}:{r['address']}")
+
+    def duplicate_selected_register(self):
+        """Copy the selected register to the next free range in its Modbus table."""
+        cur = self.slave_list.currentRow()
+        if cur < 0:
+            QtWidgets.QMessageBox.warning(self, 'Warning', 'No slave selected')
+            return
+
+        reg_row = self.table.currentRow()
+        if reg_row < 0:
+            QtWidgets.QMessageBox.warning(self, 'Warning', 'No register selected')
+            return
+
+        slave = self.slaves[cur]
+        regs = slave.get('registers', [])
+        orig = self._orig_index_for_row(reg_row)
+        if orig < 0 or orig >= len(regs):
+            return
+
+        source = regs[orig]
+        duplicate = deepcopy(source)
+        size = self.get_register_size(duplicate.get('data_type', 'uint16'), duplicate)
+        address = int(source['address']) + size
+
+        # Keep the whole multi-word value together and avoid collisions in the
+        # same Modbus table.
+        while True:
+            candidate = range(address, address + size)
+            overlaps = any(
+                reg['table'] == duplicate['table'] and any(
+                    item in range(
+                        int(reg['address']),
+                        int(reg['address']) + self.get_register_size(
+                            reg.get('data_type', 'uint16'), reg
+                        )
+                    )
+                    for item in candidate
+                )
+                for reg in regs
+            )
+            if not overlaps:
+                break
+            address += 1
+
+        duplicate['address'] = address
+        duplicate['name'] = f"{source.get('name', 'register')}_copy"
+        regs.append(duplicate)
+
+        rt = self.runtimes.get(slave['name'])
+        if rt:
+            self.write_register_value(rt, duplicate, duplicate.get('value', 0))
+
+        self.populate_table(slave)
+        self.statusBar().showMessage(
+            f"Duplicated register: {duplicate['table'].upper()}:{duplicate['address']}"
+        )
 
     def apply_table_row(self, visual_row: int):
         cur = self.slave_list.currentRow()
@@ -1037,6 +1119,7 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         reg['value'] = value
+        self.pending_edit_keys.discard(self._get_reg_key_by_orig(orig))
 
         timer = self.edit_grace_timers.pop(visual_row, None)
         if timer:
@@ -1086,6 +1169,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 continue
             orig = self._orig_index_for_row(visual_row)
             if orig >= len(regs):
+                continue
+            if self._get_reg_key_by_orig(orig) in self.pending_edit_keys:
                 continue
             rows_to_refresh.append((visual_row, orig))
             regs_to_read.append(regs[orig])

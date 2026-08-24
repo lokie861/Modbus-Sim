@@ -215,7 +215,9 @@ class RegisterDialog(QtWidgets.QDialog):
             else:
                 self.size_label.setText(f'Size: {size}')
         
-        self.endian.setEnabled(dtype != 'uint16' and dtype != 'string')
+        # Strings also use register byte order, so allow selecting big/little
+        # endian for them just like other multi-register data types.
+        self.endian.setEnabled(dtype != 'uint16')
         
         # Configure auto-gen modes based on data type
         current_mode = self.auto_gen_mode.currentText()

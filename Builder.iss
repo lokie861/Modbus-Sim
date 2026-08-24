@@ -4,7 +4,7 @@
 [Setup]
 ; Basic app info
 AppName=Modbus-Sim
-AppVersion=0.2.1
+AppVersion=0.2.2
 AppPublisher=Lokesh
 AppPublisherURL=https://github.com/lokie861
 AppSupportURL=mailto:plokesh23.01@gmail.com
@@ -55,13 +55,6 @@ Name: "desktopicon"; Description: "Create a &desktop icon"; GroupDescription: "A
 Filename: "{app}\Modbus-Sim.exe"; WorkingDir: "{app}"; Description: "Launch Modbus-Sim"; Flags: postinstall skipifsilent nowait
 
 [Code]
-if (CurStep = ssPostInstall) then
-begin
-  CreateStartupBatch();
-
-  // Notify shell so .mbsim icon/association appears immediately (no reboot)
-  Exec('cmd.exe', '/c assoc .mbsim=ModbusSimFile', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-end;
 // APPID constant here should be single-braced (used for string manipulation)
 const
   APPID = '{A3F7D9B2-8E5C-4A1D-9B6F-7C2E4D8A3F1B}';
@@ -132,6 +125,8 @@ begin
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
 begin
   if (CurStep = ssInstall) then
   begin
@@ -152,6 +147,9 @@ begin
   begin
     // create startup batch so registry Run entry points to it
     CreateStartupBatch();
+    // Notify the shell so the .mbsim association appears immediately.
+    Exec('cmd.exe', '/c assoc .mbsim=ModbusSimFile', '', SW_HIDE,
+         ewWaitUntilTerminated, ResultCode);
   end;
 end;
 

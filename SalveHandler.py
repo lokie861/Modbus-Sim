@@ -7,8 +7,6 @@ from pymodbus.device import ModbusDeviceIdentification
 from pymodbus.transaction import ModbusRtuFramer, ModbusAsciiFramer
 from ModbusContext import SimpleModbusContext
 
-from pymodbus.pdu import ModbusPDU
-
 class SlaveRuntime(QtCore.QObject):
     status_changed = QtCore.pyqtSignal(str)
 
@@ -115,34 +113,20 @@ class SlaveRuntime(QtCore.QObject):
         self.status_changed.emit(f"Listening Serial {mode_display} {port}@{baudrate}")
         print(f"Starting Serial Server {mode_display} ({port}@{baudrate}) ...")
 
-        # Synchronous Serial server
+        # StartSerialServer forwards these transport settings to pyserial.
+        # Passing them through a ModbusPDU (as the previous code did) prevents
+        # the serial transport from opening correctly.
         try:
-            """
-            classpymodbus.server.ModbusUdpServer(context: ModbusServerContext, *, framer=FramerType.SOCKET, 
-            identity: ModbusDeviceIdentification | None = None, address: tuple[str, int] = ('', 502), 
-            ignore_missing_devices: bool = False, 
-            broadcast_enable: bool = False, 
-            trace_packet: Callable[[bool, bytes], bytes] | None = None, 
-            trace_pdu: Callable[[bool, ModbusPDU], ModbusPDU] | None = None, 
-            trace_connect: Callable[[bool], None] | None = None, 
-            custom_pdu: list[type[ModbusPDU]] | None = None)
-            """
-            pdu_settings= ModbusPDU(
-                slave= unit_id,
-                skip_encode=False,
-                check=True,
-                baudrate=baudrate,
-                bytesize=bytesize,
-                parity=parity,
-                stopbits=stopbits,
-            )
             StartSerialServer(
                 context=context,
                 framer=framer_cls,
                 identity=identity,
                 port=port,
+                baudrate=baudrate,
+                parity=parity,
+                bytesize=bytesize,
+                stopbits=stopbits,
                 timeout=0.5,
-                custom_pdu=pdu_settings,
             )
         except Exception as e:
             print(f"Serial server error: {e}")

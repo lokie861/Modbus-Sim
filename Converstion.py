@@ -70,26 +70,38 @@ class TypeConversions():
 
     # ===  STRINGS  ===
     def from_string(self, value: str, inverse: bool = False) -> List[int]:
-        """Convert ASCII string into a list of u16 registers."""
+        """
+        Convert ASCII string into a list of u16 registers.
+        Each register stores two ASCII characters.
+
+        inverse=False: little-endian (low byte first)
+        inverse=True: big-endian (high byte first)
+        """
         data = value.encode("ascii")
         if len(data) % 2 != 0:
             data += b"\x00"
         registers = []
         for i in range(0, len(data), 2):
-            if not inverse:
+            if not inverse:  # little-endian
                 registers.append(data[i] | (data[i+1] << 8))
-            else:
+            else:  # big-endian
                 registers.append((data[i] << 8) | data[i+1])
         return registers
 
     def to_string(self, registers: List[int], inverse: bool = False) -> str:
-        """Convert a list of u16 registers into an ASCII string."""
+        """
+        Convert a list of u16 registers into an ASCII string.
+        Each register contains two ASCII characters.
+
+        inverse=False: little-endian (low byte first)
+        inverse=True: big-endian (high byte first)
+        """
         chars = []
         for reg in registers:
-            if not inverse:
+            if not inverse:  # little-endian
                 chars.append(reg & 0xFF)
                 chars.append((reg >> 8) & 0xFF)
-            else:
+            else:  # big-endian
                 chars.append((reg >> 8) & 0xFF)
                 chars.append(reg & 0xFF)
-        return bytes(chars).decode("ascii", errors='ignore').rstrip("\x00")
+        return bytes(chars).decode("ascii").rstrip("\x00")
