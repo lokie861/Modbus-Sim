@@ -30,6 +30,8 @@ import sys
 import json
 import os
 import threading
+import csv
+import configparser
 from copy import deepcopy
 from functools import partial
 from Converstion import TypeConversions
@@ -91,6 +93,10 @@ class MainWindow(QtWidgets.QMainWindow):
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
         h = QtWidgets.QHBoxLayout(central)
+
+        help_menu = self.menuBar().addMenu('&Help')
+        help_action = help_menu.addAction('Application Help')
+        help_action.triggered.connect(self.show_help_dialog)
 
         left = QtWidgets.QVBoxLayout()
         h.addLayout(left, 2)
@@ -169,6 +175,14 @@ class MainWindow(QtWidgets.QMainWindow):
         add_reg_btn = QtWidgets.QPushButton('➕ Add Register')
         add_reg_btn.clicked.connect(self.add_register_dialog)
         btn_layout.addWidget(add_reg_btn)
+
+        import_reg_btn = QtWidgets.QPushButton('📥Import Registers…')
+        import_reg_btn.clicked.connect(self.import_registers)
+        btn_layout.addWidget(import_reg_btn)
+
+        export_reg_btn = QtWidgets.QPushButton('📤Export Registers…')
+        export_reg_btn.clicked.connect(self.export_registers)
+        btn_layout.addWidget(export_reg_btn)
 
         refresh_btn = QtWidgets.QPushButton('🔄 Refresh Values')
         refresh_btn.clicked.connect(self.refresh_table_values)
@@ -950,6 +964,239 @@ class MainWindow(QtWidgets.QMainWindow):
             self.current_edit_row is not None
             or self.table.state() == QtWidgets.QAbstractItemView.EditingState
         )
+
+    # ── register import / export ──────────────────────────────────────────────
+
+    _REGISTER_FILE_FIELDS = (
+        'address', 'table', 'data_type', 'endian', 'name', 'value', 'writable',
+        'string_length', 'auto_gen_enabled', 'auto_gen_mode', 'auto_gen_min',
+        'auto_gen_max', 'auto_gen_step', 'auto_gen_interval', 'auto_gen_active',
+    )
+
+    @staticmethod
+    def _as_bool(value, default=False):
+        if value is None or value == '':
+            return default
+        return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+    def _register_to_file_row(self, reg):
+        auto = reg.get('auto_gen', {})
+        return {
+            'address': reg.get('address', 0),
+            'table': reg.get('table', 'hr'),
+            'data_type': reg.get('data_type', 'uint16'),
+            'endian': reg.get('endian', 'big'),
+            'name': reg.get('name', ''),
+            'value': reg.get('value', 0),
+            'writable': reg.get('writable', True),
+            'string_length': reg.get('string_length', 10),
+            'auto_gen_enabled': auto.get('enabled', False),
+            'auto_gen_mode': auto.get('mode', 'Random'),
+            'auto_gen_min': auto.get('min', 0),
+            'auto_gen_max': auto.get('max', 100),
+            'auto_gen_step': auto.get('step', 1),
+            'auto_gen_interval': auto.get('interval', 1000),
+            'auto_gen_active': auto.get('active', False),
+        }
+
+    def _file_row_to_register(self, row, source):
+        """Validate and convert a CSV/INI row into the app's register schema."""
+        tables = {'co', 'di', 'hr', 'ir'}
+        types = {
+            'uint16', 'int16', 'int32', 'uint32', 'float32', 'int64', 'uint64',
+            'double64', 'string', 'bool',
+        }
+        table = str(row.get('table', 'hr')).strip().lower()
+        dtype = str(row.get('data_type', 'uint16')).strip().lower()
+        if table not in tables:
+            raise ValueError(f"{source}: invalid table '{table}'")
+        if dtype not in types:
+            raise ValueError(f"{source}: invalid data type '{dtype}'")
+
+        try:
+            address = int(str(row.get('address', '')).strip(), 0)
+        except ValueError as exc:
+            raise ValueError(f"{source}: address must be an integer") from exc
+        if address < 0:
+            raise ValueError(f"{source}: address cannot be negative")
+
+        value_text = str(row.get('value', ''))
+        try:
+            if dtype in ('float32', 'double64'):
+                value = float(value_text)
+            elif dtype == 'string':
+                value = value_text
+            elif dtype == 'bool':
+                value = int(self._as_bool(value_text))
+            else:
+                value = int(value_text, 0)
+        except ValueError as exc:
+            raise ValueError(f"{source}: invalid value for {dtype}") from exc
+
+        reg = {
+            'address': address,
+            'table': table,
+            'data_type': dtype,
+            'endian': str(row.get('endian', 'big')).strip().lower(),
+            'name': str(row.get('name', '')).strip() or f'{table}_{address}',
+            'value': value,
+            'writable': self._as_bool(row.get('writable'), True),
+        }
+        if reg['endian'] not in ('big', 'little'):
+            raise ValueError(f"{source}: endian must be 'big' or 'little'")
+        if dtype == 'string':
+            try:
+                reg['string_length'] = max(1, int(row.get('string_length', 10)))
+            except ValueError as exc:
+                raise ValueError(f"{source}: string_length must be an integer") from exc
+
+        enabled = self._as_bool(row.get('auto_gen_enabled'), False)
+        auto = {'enabled': enabled, 'active': self._as_bool(row.get('auto_gen_active'), False)}
+        if enabled:
+            mode = str(row.get('auto_gen_mode', 'Random')).strip()
+            if mode not in ('Toggle', 'Random', 'Increment', 'Decrement'):
+                raise ValueError(f"{source}: invalid auto-generation mode '{mode}'")
+            number = float if dtype in ('float32', 'double64') else int
+            try:
+                auto.update({
+                    'mode': mode,
+                    'min': number(row.get('auto_gen_min', 0)),
+                    'max': number(row.get('auto_gen_max', 100)),
+                    'step': number(row.get('auto_gen_step', 1)),
+                    'interval': max(100, int(row.get('auto_gen_interval', 1000))),
+                })
+            except ValueError as exc:
+                raise ValueError(f"{source}: invalid auto-generation settings") from exc
+        reg['auto_gen'] = auto
+        return reg
+
+    def _registers_overlap(self, first, second):
+        if first['table'] != second['table']:
+            return False
+        first_end = int(first['address']) + self.get_register_size(first['data_type'], first)
+        second_end = int(second['address']) + self.get_register_size(second['data_type'], second)
+        return int(first['address']) < second_end and int(second['address']) < first_end
+
+    def export_registers(self):
+        cur = self.slave_list.currentRow()
+        if cur < 0:
+            QtWidgets.QMessageBox.warning(self, 'Warning', 'Select a slave first')
+            return
+        fname, selected_filter = QtWidgets.QFileDialog.getSaveFileName(
+            self, 'Export Registers', '',
+            'CSV Files (*.csv);;INI Files (*.ini)'
+        )
+        if not fname:
+            return
+        extension = '.csv' if selected_filter.startswith('CSV') else '.ini'
+        if not os.path.splitext(fname)[1]:
+            fname += extension
+
+        rows = [self._register_to_file_row(reg) for reg in self.slaves[cur].get('registers', [])]
+        try:
+            if fname.lower().endswith('.csv'):
+                with open(fname, 'w', newline='', encoding='utf-8') as file:
+                    writer = csv.DictWriter(file, fieldnames=self._REGISTER_FILE_FIELDS)
+                    writer.writeheader()
+                    writer.writerows(rows)
+            elif fname.lower().endswith('.ini'):
+                config = configparser.ConfigParser()
+                for index, row in enumerate(rows, start=1):
+                    config[f'register_{index}'] = {key: str(value) for key, value in row.items()}
+                with open(fname, 'w', encoding='utf-8') as file:
+                    config.write(file)
+            else:
+                raise ValueError('Use a .csv or .ini extension')
+            self.statusBar().showMessage(f'Exported {len(rows)} registers to: {fname}')
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, 'Export Failed', str(exc))
+
+    def import_registers(self):
+        cur = self.slave_list.currentRow()
+        if cur < 0:
+            QtWidgets.QMessageBox.warning(self, 'Warning', 'Select a slave first')
+            return
+        fname, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, 'Import Registers', '', 'Register Files (*.csv *.ini)'
+        )
+        if not fname:
+            return
+        try:
+            if fname.lower().endswith('.csv'):
+                with open(fname, newline='', encoding='utf-8-sig') as file:
+                    rows = list(csv.DictReader(file))
+                if not rows:
+                    raise ValueError('The CSV file contains no register rows')
+            elif fname.lower().endswith('.ini'):
+                config = configparser.ConfigParser()
+                config.read(fname, encoding='utf-8')
+                rows = [dict(config[section]) for section in config.sections()]
+                if not rows:
+                    raise ValueError('The INI file contains no register sections')
+            else:
+                raise ValueError('Select a .csv or .ini file')
+
+            imported = [
+                self._file_row_to_register(row, f'row {index}')
+                for index, row in enumerate(rows, start=1)
+            ]
+            slave = self.slaves[cur]
+            all_registers = slave.get('registers', []) + imported
+            for index, reg in enumerate(all_registers):
+                for other in all_registers[:index]:
+                    if self._registers_overlap(reg, other):
+                        raise ValueError(
+                            f"{reg['table'].upper()}:{reg['address']} overlaps with "
+                            f"{other['table'].upper()}:{other['address']}"
+                        )
+
+            slave.setdefault('registers', []).extend(imported)
+            rt = self.runtimes.get(slave['name'])
+            if rt:
+                for reg in imported:
+                    self.write_register_value(rt, reg, reg['value'])
+            self.populate_table(slave)
+            self.statusBar().showMessage(f'Imported {len(imported)} registers from: {fname}')
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self, 'Import Failed', str(exc))
+
+    def show_help_dialog(self):
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle('Modbus-Sim Help')
+        dialog.resize(760, 620)
+        layout = QtWidgets.QVBoxLayout(dialog)
+        help_text = QtWidgets.QTextBrowser()
+        help_text.setOpenExternalLinks(True)
+        help_text.setHtml('''
+            <h2>Modbus-Sim</h2>
+            <p>Create simulated Modbus slave devices over TCP or serial RTU/ASCII.</p>
+            <h3>Quick start</h3>
+            <ol>
+              <li>Select <b>Add Slave</b>, choose TCP or Serial, then enter its connection settings and Unit ID.</li>
+              <li>Select that slave and choose <b>Start Selected</b>.</li>
+              <li>Add holding/input registers or coils/discrete inputs with the required address and data type.</li>
+              <li>Use a Modbus master/client to read or write the configured device.</li>
+            </ol>
+            <h3>Registers</h3>
+            <p>Holding registers (<b>HR</b>) and coils (<b>CO</b>) are normally writable. Input registers (<b>IR</b>) and discrete inputs (<b>DI</b>) are normally read-only. Addresses are zero-based. Multi-word values occupy consecutive addresses: 32-bit values use 2 registers and 64-bit values use 4.</p>
+            <p>For strings, choose the number of allocated registers. Writing a shorter string clears all unused registers in that allocation.</p>
+            <h3>Endian setting</h3>
+            <p>For multi-word numbers and strings, <b>big</b> uses high byte/word first; <b>little</b> uses low byte/word first. Match the setting required by your Modbus master.</p>
+            <h3>Editing and refresh</h3>
+            <p>Enter a new value in the Value column and click <b>Apply</b>. A typed value is protected from Auto-Refresh until you apply it. Auto-Refresh reads the current values from the running slave datastore.</p>
+            <h3>Auto generation</h3>
+            <p>Enable it in the register dialog, then use the <b>Gen</b> button in the Actions column. Available modes are Toggle, Random, Increment, and Decrement; the configured interval controls update frequency.</p>
+            <h3>Import and export</h3>
+            <p>Import/export applies to the selected slave. CSV and INI files contain address, table, data type, endian, name, value, writable flag, string length, and auto-generation settings. Import rejects invalid data and overlapping address ranges.</p>
+            <h3>Configuration files</h3>
+            <p><b>Save Config</b> and <b>Load Config</b> save or restore the entire simulator as a <code>.mbsim</code> JSON file.</p>
+        ''')
+        layout.addWidget(help_text)
+        buttons = QtWidgets.QDialogButtonBox(QtWidgets.QDialogButtonBox.Close)
+        buttons.rejected.connect(dialog.reject)
+        buttons.accepted.connect(dialog.accept)
+        layout.addWidget(buttons)
+        dialog.exec_()
 
     # ── register CRUD ─────────────────────────────────────────────────────────
 
