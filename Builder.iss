@@ -45,8 +45,6 @@ Root: HKCU; Subkey: "SOFTWARE\Classes\ModbusSimFile";                   ValueTyp
 Root: HKCU; Subkey: "SOFTWARE\Classes\ModbusSimFile\DefaultIcon";       ValueType: string; ValueName: "";        ValueData: "{app}\Modbus-Sim.exe,0"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "SOFTWARE\Classes\ModbusSimFile\shell\open\command"; ValueType: string; ValueName: "";       ValueData: """{app}\Modbus-Sim.exe"" ""%1"""; Flags: uninsdeletekey
 
-; Tell Explorer to refresh its file-type cache after install/uninstall
-Root: HKCU; Subkey: "SOFTWARE\Classes\.mbsim"; ValueType: string; ValueName: ""; ValueData: "ModbusSimFile"; Flags: uninsdeletekey
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop icon"; GroupDescription: "Additional icons:"
 
@@ -58,6 +56,14 @@ Filename: "{app}\Modbus-Sim.exe"; WorkingDir: "{app}"; Description: "Launch Modb
 // APPID constant here should be single-braced (used for string manipulation)
 const
   APPID = '{A3F7D9B2-8E5C-4A1D-9B6F-7C2E4D8A3F1B}';
+
+  SHCNE_ASSOCCHANGED = $08000000;
+  SHCNF_IDLIST = $0000;
+
+// Notifies Explorer that a file association changed so the icon/behavior
+// updates immediately, without requiring a logoff or reboot.
+procedure SHChangeNotify(wEventId: Longint; uFlags: Longint; dwItem1: Longint; dwItem2: Longint);
+  external 'SHChangeNotify@shell32.dll stdcall';
 
 function GetUninstallString(): string;
 var
@@ -125,8 +131,6 @@ begin
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
-var
-  ResultCode: Integer;
 begin
   if (CurStep = ssInstall) then
   begin
@@ -148,8 +152,7 @@ begin
     // create startup batch so registry Run entry points to it
     CreateStartupBatch();
     // Notify the shell so the .mbsim association appears immediately.
-    Exec('cmd.exe', '/c assoc .mbsim=ModbusSimFile', '', SW_HIDE,
-         ewWaitUntilTerminated, ResultCode);
+    SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, 0, 0);
   end;
 end;
 
@@ -230,5 +233,8 @@ begin
         // ignore errors
       end;
     end;
+
+    // Notify the shell so the removed .mbsim association disappears immediately.
+    SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, 0, 0);
   end;
 end;

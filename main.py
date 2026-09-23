@@ -98,6 +98,9 @@ class MainWindow(QtWidgets.QMainWindow):
         help_action = help_menu.addAction('Application Help')
         help_action.triggered.connect(self.show_help_dialog)
 
+        assoc_action = help_menu.addAction('Associate .mbsim Files (Windows)')
+        assoc_action.triggered.connect(self.register_file_association)
+
         left = QtWidgets.QVBoxLayout()
         h.addLayout(left, 2)
 
@@ -1566,7 +1569,59 @@ class MainWindow(QtWidgets.QMainWindow):
         )
         if fname:
             self.load_config_from_path(fname)
+    def register_file_association(self, silent=False):
+        """
+        Associate .mbsim files with this application under the current
+        user (HKEY_CURRENT_USER) — no admin rights required.
+        Only works for the packaged (PyInstaller) .exe; running as a
+        raw Python script has no single .exe to point Windows at.
+        """
+        if not getattr(sys, 'frozen', False):
+            if not silent:
+                QtWidgets.QMessageBox.warning(
+                    self, 'Not Available',
+                    'File association requires the packaged .exe build, not the Python script.'
+                )
+            return
 
+        import winreg
+        import ctypes
+
+        exe_path = sys.executable  # the running .exe when frozen
+        prog_id = 'ModbusSim.mbsimfile'
+        icon_path = os.path.join(BASE_PATH, 'logo', 'Modbus-Sim-Orignial-Logo.ico')
+
+        try:
+            # 1. .mbsim extension -> ProgID
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r'Software\Classes\.mbsim') as key:
+                winreg.SetValue(key, '', winreg.REG_SZ, prog_id)
+
+            # 2. Describe the ProgID
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, rf'Software\Classes\{prog_id}') as key:
+                winreg.SetValue(key, '', winreg.REG_SZ, 'Modbus-Sim Configuration')
+
+            # 3. Icon shown in Explorer
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, rf'Software\Classes\{prog_id}\DefaultIcon') as key:
+                winreg.SetValue(key, '', winreg.REG_SZ, icon_path)
+
+            # 4. Open command — %1 becomes sys.argv[1] on double-click
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, rf'Software\Classes\{prog_id}\shell\open\command') as key:
+                winreg.SetValue(key, '', winreg.REG_SZ, f'"{exe_path}" "%1"')
+
+            # 5. Tell Explorer the association changed, so it takes effect immediately
+            SHCNE_ASSOCCHANGED = 0x08000000
+            SHCNF_IDLIST = 0x0000
+            ctypes.windll.shell32.SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, None, None)
+
+            if not silent:
+                QtWidgets.QMessageBox.information(
+                    self, 'Done',
+                    '.mbsim files are now associated with Modbus-Sim.\n'
+                    'Double-click a .mbsim file to open it here.'
+                )
+        except Exception as e:
+            if not silent:
+                QtWidgets.QMessageBox.critical(self, 'Error', f'Failed to register file association:\n{e}')
 
 # --------------------- Main ---------------------
 def main():
