@@ -4,7 +4,7 @@
 [Setup]
 ; Basic app info
 AppName=Modbus-Sim
-AppVersion=0.2.2
+AppVersion=0.2.3
 AppPublisher=Lokesh
 AppPublisherURL=https://github.com/lokie861
 AppSupportURL=mailto:plokesh23.01@gmail.com

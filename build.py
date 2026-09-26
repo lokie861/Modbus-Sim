@@ -51,6 +51,7 @@ def build_exe():
         f'--add-data "{project_dir}/ModbusContext.py;." '
         f'--add-data "{project_dir}/RegisterDialog.py;." '
         f'--add-data "{project_dir}/SalveHandler.py;." '
+        f'--add-data "{project_dir}/IniImportDialog.py;." '
         f'--add-data "{project_dir}/logo;logo" '
 
 

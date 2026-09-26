@@ -5,7 +5,7 @@ a = Analysis(
     ['D:\\Personal Projects\\Modbus-Sim\\main.py'],
     pathex=[],
     binaries=[],
-    datas=[('D:\\Personal Projects\\Modbus-Sim/Converstion.py', '.'), ('D:\\Personal Projects\\Modbus-Sim/ModbusContext.py', '.'), ('D:\\Personal Projects\\Modbus-Sim/RegisterDialog.py', '.'), ('D:\\Personal Projects\\Modbus-Sim/SalveHandler.py', '.'), ('D:\\Personal Projects\\Modbus-Sim/logo', 'logo')],
+    datas=[('D:\\Personal Projects\\Modbus-Sim/Converstion.py', '.'), ('D:\\Personal Projects\\Modbus-Sim/ModbusContext.py', '.'), ('D:\\Personal Projects\\Modbus-Sim/RegisterDialog.py', '.'), ('D:\\Personal Projects\\Modbus-Sim/SalveHandler.py', '.'), ('D:\\Personal Projects\\Modbus-Sim/IniImportDialog.py', '.'), ('D:\\Personal Projects\\Modbus-Sim/logo', 'logo')],
     hiddenimports=['PIL.Image', 'pymodbus', 'bidict', 'PyQt5', 'PyQt5.QtWidgets', 'pyserial', 'wmi', 'pywintypes'],
     hookspath=[],
     hooksconfig={},

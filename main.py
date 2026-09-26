@@ -37,6 +37,7 @@ from functools import partial
 from Converstion import TypeConversions
 from SalveHandler import SlaveRuntime, SlaveDialog
 from RegisterDialog import RegisterDialog
+from IniImportDialog import IniSectionSelectDialog, IniValueImportDialog
 from PyQt5 import QtWidgets, QtCore
 from PyQt5.QtGui import QIcon, QPalette, QColor
 from PyQt5.QtWidgets import QApplication
@@ -186,6 +187,10 @@ class MainWindow(QtWidgets.QMainWindow):
         export_reg_btn = QtWidgets.QPushButton('📤Export Registers…')
         export_reg_btn.clicked.connect(self.export_registers)
         btn_layout.addWidget(export_reg_btn)
+
+        import_ini_wizard_btn = QtWidgets.QPushButton('📥 Import Name/Address from INI…')
+        import_ini_wizard_btn.clicked.connect(self.import_registers_from_ini_wizard)
+        btn_layout.addWidget(import_ini_wizard_btn)
 
         refresh_btn = QtWidgets.QPushButton('🔄 Refresh Values')
         refresh_btn.clicked.connect(self.refresh_table_values)
@@ -1162,6 +1167,55 @@ class MainWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f'Imported {len(imported)} registers from: {fname}')
         except Exception as exc:
             QtWidgets.QMessageBox.critical(self, 'Import Failed', str(exc))
+
+    def import_registers_from_ini_wizard(self):
+        """
+        Guided INI import: the INI file supplies only NAME = ADDRESS pairs
+        (grouped into sections). Everything else about the register
+        (table, data type, endianness, writable flag, initial value) is
+        chosen by the user in the wizard, not read from the file.
+        """
+        cur = self.slave_list.currentRow()
+        if cur < 0:
+            QtWidgets.QMessageBox.warning(self, 'Warning', 'Select a slave first')
+            return
+        slave = self.slaves[cur]
+
+        # Step 1: file + section selection
+        sec_dlg = IniSectionSelectDialog(self)
+        if sec_dlg.exec_() != QtWidgets.QDialog.Accepted:
+            return
+        selected_sections = sec_dlg.selected_sections()
+        if not selected_sections:
+            return
+
+        # Step 2: user configures table/type/endian/writable/value per entry
+        val_dlg = IniValueImportDialog(self, sec_dlg.config, selected_sections)
+        if val_dlg.exec_() != QtWidgets.QDialog.Accepted:
+            return
+        new_regs = val_dlg.get_selected_registers()
+        if not new_regs:
+            return
+
+        # Reject/skip anything that overlaps a register the slave already has.
+        added = 0
+        skipped = 0
+        for r in new_regs:
+            if any(self._registers_overlap(r, reg) for reg in slave.get('registers', [])):
+                skipped += 1
+                continue
+            slave.setdefault('registers', []).append(r)
+            rt = self.runtimes.get(slave['name'])
+            if rt:
+                self.write_register_value(rt, r, r.get('value', 0))
+            added += 1
+
+        self.populate_table(slave)
+        msg = f"Imported {added} register(s) from INI into '{slave['name']}'"
+        if skipped:
+            msg += f" ({skipped} skipped due to address overlap with existing registers)"
+        self.statusBar().showMessage(msg)
+        QtWidgets.QMessageBox.information(self, 'Import Complete', msg)
 
     def show_help_dialog(self):
         dialog = QtWidgets.QDialog(self)
